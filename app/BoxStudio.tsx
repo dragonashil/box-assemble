@@ -339,30 +339,16 @@ export default function BoxStudio() {
 
           <div className="stage-canvas">
             <div className="grid-floor" aria-hidden="true" />
-            {viewMode === "dieline" ? (
-              <div className="dieline-view" role="img" aria-label="G형 택배박스 전개도">
-                <div className="dieline-piece piece-a" />
-                <div className="dieline-piece piece-b" />
-                <div className="dieline-piece piece-c" />
-                <div className="dieline-piece piece-d" />
-                <div className="dieline-piece piece-e" />
-                <div className="dieline-piece piece-f" />
-                <div className="fold-line fold-one" />
-                <div className="fold-line fold-two" />
-                <div className="fold-line fold-three" />
-                <span className="dieline-label">CUT / FOLD PREVIEW</span>
-              </div>
-            ) : (
-              <BoxPreview
-                width={width}
-                depth={depth}
-                height={height}
-                mode={viewMode}
-                paper={paper}
-                print={printType}
-                autoRotate={autoRotate}
-              />
-            )}
+            <BoxPreview
+              boxType={boxType}
+              width={width}
+              depth={depth}
+              height={height}
+              mode={viewMode}
+              paper={paper}
+              print={printType}
+              autoRotate={autoRotate}
+            />
             <div className="dimension dimension-width">
               <span />
               <b>{width} mm</b>
@@ -383,7 +369,7 @@ export default function BoxStudio() {
               </span>
               <span className="scale-chip">1:1 실측 비율</span>
             </div>
-            <p><Layer size={16} aria-hidden="true" /> 마우스로 드래그해 모든 면을 확인하세요</p>
+            <p><Layer size={16} aria-hidden="true" /> 전개도와 완성 상태가 동일한 접힘선으로 연결됩니다</p>
           </div>
         </section>
 

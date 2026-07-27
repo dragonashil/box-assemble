@@ -60,3 +60,19 @@ test("ships product metadata, SUIT, and no starter preview", async () => {
     access(new URL("app/_sites-preview/SkeletonPreview.tsx", templateRoot)),
   );
 });
+
+test("connects box selection to planar hinge models", async () => {
+  const [studio, preview] = await Promise.all([
+    readFile(new URL("../app/BoxStudio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/BoxPreview.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(studio, /boxType=\{boxType\}/);
+  assert.doesNotMatch(studio, /viewMode === "dieline" \?/);
+  assert.match(preview, /PlaneGeometry/);
+  assert.match(preview, /DoubleSide/);
+  assert.match(preview, /buildMailer/);
+  assert.match(preview, /buildShipping/);
+  assert.match(preview, /buildDrawer/);
+  assert.doesNotMatch(preview, /new THREE\.BoxGeometry/);
+});
