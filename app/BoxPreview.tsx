@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 export type BoxType = "mailer" | "shipping" | "drawer";
-export type FoldMode = "closed" | "open" | "dieline";
+export type FoldMode = "closed" | "open" | "dieline" | "folding";
 
 type BoxPreviewProps = {
   boxType: BoxType;
@@ -15,12 +15,15 @@ type BoxPreviewProps = {
   paper: "kraft" | "white" | "green";
   print: "none" | "one" | "full";
   autoRotate: boolean;
+  foldProgress?: number;
 };
 
 type Joint = {
+  role?: string;
   group: THREE.Group;
   axis: "x" | "y";
   angle: number;
+  openAngle?: number;
   phase: [number, number];
 };
 
@@ -30,7 +33,7 @@ type FoldModel = {
   creaseLines: THREE.Line[];
   update: (progress: number) => void;
   openProgress: number;
-  flatScale: number;
+  flatZoom: number;
 };
 
 type BuildContext = {
@@ -162,6 +165,8 @@ type FlapOptions = {
   joints: Joint[];
   creaseLines: THREE.Line[];
   printed?: boolean;
+  role?: string;
+  openAngle?: number;
 };
 
 function createFlap({
@@ -176,6 +181,8 @@ function createFlap({
   joints,
   creaseLines,
   printed = false,
+  role,
+  openAngle,
 }: FlapOptions) {
   const anchorGroup = new THREE.Group();
   anchorGroup.position.set(anchor[0], anchor[1], 0);
@@ -186,7 +193,14 @@ function createFlap({
   anchorGroup.add(foldGroup);
   createPanel(foldGroup, width, span, 0, span / 2, context, printed);
   createCrease(anchorGroup, width, "x", context, creaseLines);
-  joints.push({ group: foldGroup, axis: "x", angle, phase });
+  joints.push({
+    role,
+    group: foldGroup,
+    axis: "x",
+    angle,
+    openAngle,
+    phase,
+  });
   return foldGroup;
 }
 
@@ -202,6 +216,8 @@ type SeamOptions = {
   creaseLines: THREE.Line[];
   printed?: boolean;
   centered?: boolean;
+  role?: string;
+  openAngle?: number;
 };
 
 function createSeam({
@@ -216,6 +232,8 @@ function createSeam({
   creaseLines,
   printed = false,
   centered = false,
+  role,
+  openAngle,
 }: SeamOptions) {
   const anchorGroup = new THREE.Group();
   anchorGroup.position.set(anchor[0], anchor[1], 0);
@@ -233,7 +251,14 @@ function createSeam({
     printed,
   );
   createCrease(anchorGroup, height, "y", context, creaseLines);
-  joints.push({ group: foldGroup, axis: "y", angle, phase });
+  joints.push({
+    role,
+    group: foldGroup,
+    axis: "y",
+    angle,
+    openAngle,
+    phase,
+  });
   return foldGroup;
 }
 
@@ -249,8 +274,12 @@ function buildMailer(
   createPanel(group, width, depth, 0, 0, context);
 
   const common = { context, joints, creaseLines };
+  // FOLD-inspired rigid linkage: every paper face is attached to its parent
+  // along one crease edge. The open pose is a separate constrained frame:
+  // every body/lid-child hinge stays assembled and only lidHinge returns to 0°.
   const back = createFlap({
     ...common,
+    role: "backWall",
     parent: group,
     anchor: [0, depth / 2],
     width,
@@ -260,6 +289,7 @@ function buildMailer(
   });
   const front = createFlap({
     ...common,
+    role: "frontWall",
     parent: group,
     anchor: [0, -depth / 2],
     heading: Math.PI,
@@ -271,6 +301,7 @@ function buildMailer(
   });
   const left = createFlap({
     ...common,
+    role: "leftWall",
     parent: group,
     anchor: [-width / 2, 0],
     heading: Math.PI / 2,
@@ -281,6 +312,7 @@ function buildMailer(
   });
   const right = createFlap({
     ...common,
+    role: "rightWall",
     parent: group,
     anchor: [width / 2, 0],
     heading: -Math.PI / 2,
@@ -290,39 +322,136 @@ function buildMailer(
     phase: [0.12, 0.44],
   });
 
-  const dustSpan = Math.min(width * 0.42, depth * 0.7);
-  createFlap({
+  // Front/back corner flaps rise first and are captured inside the rolled
+  // double side walls, matching the physical 0427 assembly order.
+  const cornerSpan = height * 0.86;
+  (
+    [
+      [front, "frontLeftCorner", -width / 2, Math.PI / 2],
+      [front, "frontRightCorner", width / 2, -Math.PI / 2],
+      [back, "backLeftCorner", -width / 2, Math.PI / 2],
+      [back, "backRightCorner", width / 2, -Math.PI / 2],
+    ] as const
+  ).forEach(([parent, role, anchorX, heading]) => {
+    createFlap({
+      ...common,
+      role,
+      parent,
+      anchor: [anchorX, height / 2],
+      heading,
+      width: height,
+      span: cornerSpan,
+      angle: Math.PI / 2,
+      phase: [0.02, 0.22],
+    });
+  });
+
+  // FEFCO 0427-style roll ends: outer wall → top rail → inner wall → lock.
+  // Keeping this as a true hinge chain makes the flat blank and assembled
+  // double wall use the exact same faces without translating any panel.
+  const railSpan = Math.max(
+    height * 0.08,
+    Math.min(height * 0.18, depth * 0.1),
+  );
+  const leftRail = createFlap({
     ...common,
+    role: "leftTopRail",
     parent: left,
     anchor: [0, height],
     width: depth,
-    span: dustSpan,
+    span: railSpan,
+    angle: Math.PI / 2,
+    phase: [0.36, 0.52],
+  });
+  const leftInnerWall = createFlap({
+    ...common,
+    role: "leftInnerWall",
+    parent: leftRail,
+    anchor: [0, railSpan],
+    width: depth,
+    span: height,
     angle: Math.PI / 2,
     phase: [0.46, 0.64],
   });
   createFlap({
     ...common,
+    role: "leftBodyLock",
+    parent: leftInnerWall,
+    anchor: [0, height],
+    width: depth * 0.72,
+    span: railSpan,
+    angle: Math.PI / 2,
+    phase: [0.56, 0.7],
+  });
+
+  const rightRail = createFlap({
+    ...common,
+    role: "rightTopRail",
     parent: right,
     anchor: [0, height],
     width: depth,
-    span: dustSpan,
+    span: railSpan,
+    angle: Math.PI / 2,
+    phase: [0.36, 0.52],
+  });
+  const rightInnerWall = createFlap({
+    ...common,
+    role: "rightInnerWall",
+    parent: rightRail,
+    anchor: [0, railSpan],
+    width: depth,
+    span: height,
     angle: Math.PI / 2,
     phase: [0.46, 0.64],
+  });
+  createFlap({
+    ...common,
+    role: "rightBodyLock",
+    parent: rightInnerWall,
+    anchor: [0, height],
+    width: depth * 0.72,
+    span: railSpan,
+    angle: Math.PI / 2,
+    phase: [0.56, 0.7],
+  });
+
+  const frontRail = createFlap({
+    ...common,
+    role: "frontTopRail",
+    parent: front,
+    anchor: [0, height],
+    width,
+    span: railSpan,
+    angle: Math.PI / 2,
+    phase: [0.4, 0.56],
+  });
+  createFlap({
+    ...common,
+    role: "frontReceiver",
+    parent: frontRail,
+    anchor: [0, railSpan],
+    width: width * 0.86,
+    span: height * 0.72,
+    angle: Math.PI / 2,
+    phase: [0.5, 0.68],
   });
 
   const lid = createFlap({
     ...common,
+    role: "lidHinge",
     parent: back,
     anchor: [0, height],
     width,
     span: depth,
     angle: Math.PI / 2,
+    openAngle: 0,
     phase: [0.78, 0.98],
     printed: true,
   });
-  const wingSpan = Math.min(height * 0.42, width * 0.16);
+  const wingSpan = Math.min(height * 0.86, width * 0.2);
   createFlap({
     ...common,
+    role: "leftLidWing",
     parent: lid,
     anchor: [-width / 2, depth / 2],
     heading: Math.PI / 2,
@@ -333,6 +462,7 @@ function buildMailer(
   });
   createFlap({
     ...common,
+    role: "rightLidWing",
     parent: lid,
     anchor: [width / 2, depth / 2],
     heading: -Math.PI / 2,
@@ -341,33 +471,47 @@ function buildMailer(
     angle: Math.PI / 2,
     phase: [0.56, 0.74],
   });
-  createFlap({
+  const tuckSpan = height * 0.82;
+  const tuck = createFlap({
     ...common,
+    role: "tuckFlap",
     parent: lid,
     anchor: [0, depth],
     width,
-    span: height * 0.28,
+    span: tuckSpan,
     angle: Math.PI / 2,
     phase: [0.62, 0.78],
   });
-
-  // The short front lock is part of the actual G-type net.
+  const cherryEarSpan = Math.min(height * 0.22, width * 0.07);
   createFlap({
     ...common,
-    parent: front,
-    anchor: [0, height],
-    width: width * 0.56,
-    span: height * 0.2,
-    angle: Math.PI / 3,
-    phase: [0.58, 0.72],
+    role: "leftCherryEar",
+    parent: tuck,
+    anchor: [-width / 2, tuckSpan / 2],
+    heading: Math.PI / 2,
+    width: tuckSpan,
+    span: cherryEarSpan,
+    angle: Math.PI / 2,
+    phase: [0.58, 0.74],
+  });
+  createFlap({
+    ...common,
+    role: "rightCherryEar",
+    parent: tuck,
+    anchor: [width / 2, tuckSpan / 2],
+    heading: -Math.PI / 2,
+    width: tuckSpan,
+    span: cherryEarSpan,
+    angle: Math.PI / 2,
+    phase: [0.58, 0.74],
   });
 
   return {
     group,
     joints,
     creaseLines,
-    openProgress: 0.52,
-    flatScale: 0.72,
+    openProgress: 1,
+    flatZoom: 0.56,
     update: () => undefined,
   };
 }
@@ -514,7 +658,7 @@ function buildShipping(
     joints,
     creaseLines,
     openProgress: 0.64,
-    flatScale: 0.56,
+    flatZoom: 0.56,
     update: () => undefined,
   };
 }
@@ -642,7 +786,7 @@ function buildDrawer(
     joints,
     creaseLines,
     openProgress: 0.7,
-    flatScale: 0.58,
+    flatZoom: 0.58,
     update,
   };
 }
@@ -672,10 +816,12 @@ export default function BoxPreview({
   paper,
   print,
   autoRotate,
+  foldProgress,
 }: BoxPreviewProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const targetModeRef = useRef<FoldMode>(mode);
   const autoRotateRef = useRef(autoRotate);
+  const foldProgressRef = useRef(foldProgress);
 
   useEffect(() => {
     targetModeRef.current = mode;
@@ -684,6 +830,10 @@ export default function BoxPreview({
   useEffect(() => {
     autoRotateRef.current = autoRotate;
   }, [autoRotate]);
+
+  useEffect(() => {
+    foldProgressRef.current = foldProgress;
+  }, [foldProgress]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -846,14 +996,19 @@ export default function BoxPreview({
 
     const getTargetProgress = () => {
       if (targetModeRef.current === "dieline") return 0;
-      if (targetModeRef.current === "open") return foldModel.openProgress;
+      if (targetModeRef.current === "folding") {
+        return clamp01(foldProgressRef.current ?? 0);
+      }
+      if (targetModeRef.current === "open") {
+        return boxType === "mailer" ? 1 : foldModel.openProgress;
+      }
       return 1;
     };
 
     const animate = () => {
       const delta = Math.min(clock.getDelta(), 0.04);
       const targetProgress = getTargetProgress();
-      if (reducedMotion) {
+      if (reducedMotion || targetModeRef.current === "folding") {
         currentProgress = targetProgress;
       } else {
         currentProgress = THREE.MathUtils.lerp(
@@ -866,23 +1021,42 @@ export default function BoxPreview({
         }
       }
 
+      const currentMode = targetModeRef.current;
+      const isDirectManipulation = currentMode === "folding";
       foldModel.joints.forEach((joint) => {
-        const angle = joint.angle * phaseProgress(currentProgress, joint.phase);
+        const angle =
+          boxType === "mailer" && currentMode === "open"
+            ? (joint.openAngle ?? joint.angle) *
+              phaseProgress(currentProgress, joint.phase)
+            : joint.angle * phaseProgress(currentProgress, joint.phase);
+        const currentAngle =
+          joint.axis === "x" ? joint.group.rotation.x : joint.group.rotation.y;
+        const nextAngle =
+          reducedMotion || isDirectManipulation
+            ? angle
+            : THREE.MathUtils.lerp(
+                currentAngle,
+                angle,
+                1 - Math.pow(0.0002, delta),
+              );
         if (joint.axis === "x") {
-          joint.group.rotation.x = angle;
+          joint.group.rotation.x = nextAngle;
         } else {
-          joint.group.rotation.y = angle;
+          joint.group.rotation.y = nextAngle;
         }
       });
       foldModel.update(currentProgress);
 
       const assembled = phaseProgress(currentProgress, [0.14, 0.68]);
-      const visualScale = THREE.MathUtils.lerp(
-        foldModel.flatScale,
+      const cameraZoom = THREE.MathUtils.lerp(
+        foldModel.flatZoom,
         1,
         assembled,
       );
-      foldModel.group.scale.setScalar(visualScale);
+      if (Math.abs(camera.zoom - cameraZoom) > 0.0001) {
+        camera.zoom = cameraZoom;
+        camera.updateProjectionMatrix();
+      }
       const creaseOpacity = THREE.MathUtils.lerp(
         0.78,
         0.05,
@@ -935,7 +1109,15 @@ export default function BoxPreview({
           : boxType === "shipping"
             ? "A형 골판지박스"
             : "서랍형 패키지"
-      }의 ${mode === "dieline" ? "전개" : mode === "open" ? "열림" : "완성"} 상태`}
+      }의 ${
+        mode === "dieline"
+          ? "전개"
+          : mode === "open"
+            ? "열림"
+            : mode === "folding"
+              ? `${Math.round((foldProgress ?? 0) * 100)}퍼센트 접힘`
+              : "완성"
+      } 상태`}
     />
   );
 }

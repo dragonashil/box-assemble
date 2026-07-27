@@ -29,7 +29,8 @@ const BoxPreview = dynamic(() => import("./BoxPreview"), {
 type BoxType = "mailer" | "shipping" | "drawer";
 type Paper = "kraft" | "white" | "green";
 type PrintType = "none" | "one" | "full";
-type ViewMode = "closed" | "open" | "dieline";
+type ViewMode = "closed" | "open" | "dieline" | "folding";
+type ViewTabMode = Exclude<ViewMode, "folding">;
 
 type Asset = {
   name: string;
@@ -43,7 +44,7 @@ const boxTypes: Array<{
   detail: string;
   icon: typeof Box;
 }> = [
-  { id: "mailer", name: "G형 택배박스", detail: "날개형 · 테이프리스", icon: Box3 },
+  { id: "mailer", name: "G형 택배박스", detail: "FEFCO 0427 · 롤엔드", icon: Box3 },
   { id: "shipping", name: "A형 골판지박스", detail: "일반형 · 접착식", icon: Box },
   { id: "drawer", name: "서랍형 패키지", detail: "슬리브 · 고급형", icon: Box2 },
 ];
@@ -64,6 +65,7 @@ const numberFormatter = new Intl.NumberFormat("ko-KR");
 export default function BoxStudio() {
   const [boxType, setBoxType] = useState<BoxType>("mailer");
   const [viewMode, setViewMode] = useState<ViewMode>("open");
+  const [foldProgress, setFoldProgress] = useState(1);
   const [paper, setPaper] = useState<Paper>("kraft");
   const [printType, setPrintType] = useState<PrintType>("one");
   const [width, setWidth] = useState(240);
@@ -144,6 +146,26 @@ export default function BoxStudio() {
 
   const openFullscreen = () => {
     stageRef.current?.requestFullscreen?.();
+  };
+
+  const handleViewModeChange = (mode: ViewTabMode) => {
+    setViewMode(mode);
+    setFoldProgress(mode === "dieline" ? 0 : 1);
+  };
+
+  const handleFoldProgressChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextProgress = Number(event.target.value) / 100;
+    setFoldProgress(nextProgress);
+    setViewMode(
+      nextProgress === 0 ? "dieline" : nextProgress === 1 ? "closed" : "folding",
+    );
+  };
+
+  const handleBoxTypeChange = (nextBoxType: BoxType) => {
+    setBoxType(nextBoxType);
+    if (nextBoxType !== "mailer" && viewMode === "folding") {
+      setViewMode("open");
+    }
   };
 
   const downloadQuote = () => {
@@ -229,7 +251,7 @@ export default function BoxStudio() {
                 <button
                   key={item.id}
                   className={`type-card ${selected ? "selected" : ""}`}
-                  onClick={() => setBoxType(item.id)}
+                  onClick={() => handleBoxTypeChange(item.id)}
                 >
                   <span className="type-icon">
                     <Icon
@@ -294,13 +316,13 @@ export default function BoxStudio() {
                 ["closed", "완성"],
                 ["open", "열림"],
                 ["dieline", "전개도"],
-              ] as Array<[ViewMode, string]>).map(([id, label]) => (
+              ] as Array<[ViewTabMode, string]>).map(([id, label]) => (
                 <button
                   key={id}
                   role="tab"
                   aria-selected={viewMode === id}
                   className={viewMode === id ? "active" : ""}
-                  onClick={() => setViewMode(id)}
+                  onClick={() => handleViewModeChange(id)}
                 >
                   {label}
                 </button>
@@ -318,7 +340,7 @@ export default function BoxStudio() {
               <button
                 className="round-button"
                 onClick={() => {
-                  setViewMode("open");
+                  handleViewModeChange("open");
                   setAutoRotate(true);
                 }}
                 aria-label="3D 보기 초기화"
@@ -337,7 +359,7 @@ export default function BoxStudio() {
             </div>
           </div>
 
-          <div className="stage-canvas">
+          <div className={`stage-canvas ${boxType === "mailer" ? "mailer-preview" : ""}`}>
             <div className="grid-floor" aria-hidden="true" />
             <BoxPreview
               boxType={boxType}
@@ -348,7 +370,48 @@ export default function BoxStudio() {
               paper={paper}
               print={printType}
               autoRotate={autoRotate}
+              foldProgress={boxType === "mailer" ? foldProgress : undefined}
             />
+            {boxType === "mailer" ? (
+              <div className="fold-progress-control">
+                <div className="fold-progress-heading">
+                  <label htmlFor="mailer-fold-progress">
+                    <Layer size={15} aria-hidden="true" />
+                    접힘 진행
+                  </label>
+                  <output htmlFor="mailer-fold-progress">
+                    {viewMode === "open"
+                      ? "몸체 100% · 뚜껑 열림"
+                      : `${Math.round(foldProgress * 100)}%`}
+                  </output>
+                </div>
+                <input
+                  id="mailer-fold-progress"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={Math.round(foldProgress * 100)}
+                  onChange={handleFoldProgressChange}
+                  aria-valuetext={
+                    viewMode === "open"
+                      ? "몸체 완성, 뚜껑만 열림"
+                      : `${Math.round(foldProgress * 100)}% 접힘`
+                  }
+                  aria-describedby="mailer-fold-endpoints"
+                  style={{
+                    background: `linear-gradient(to right, var(--mint-deep) 0 ${foldProgress * 100}%, rgba(37, 95, 74, 0.18) ${foldProgress * 100}% 100%)`,
+                  }}
+                />
+                <div
+                  className="fold-progress-endpoints"
+                  id="mailer-fold-endpoints"
+                >
+                  <span>전개도</span>
+                  <span>완성</span>
+                </div>
+              </div>
+            ) : null}
             <div className="dimension dimension-width">
               <span />
               <b>{width} mm</b>
@@ -369,7 +432,12 @@ export default function BoxStudio() {
               </span>
               <span className="scale-chip">1:1 실측 비율</span>
             </div>
-            <p><Layer size={16} aria-hidden="true" /> 전개도와 완성 상태가 동일한 접힘선으로 연결됩니다</p>
+            <p>
+              <Layer size={16} aria-hidden="true" />
+              {boxType === "mailer"
+                ? "FEFCO 0427 전개도와 완성 상태가 동일한 힌지로 연결됩니다"
+                : "전개도와 완성 상태가 동일한 접힘선으로 연결됩니다"}
+            </p>
           </div>
         </section>
 

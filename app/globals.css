@@ -612,6 +612,92 @@ select:focus-visible {
   font-size: 11px;
 }
 
+.fold-progress-control {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 14px;
+  width: min(390px, calc(100% - 32px));
+  padding: 10px 14px 9px;
+  border: 1px solid rgba(17, 17, 17, 0.12);
+  border-radius: 16px;
+  background: rgba(244, 236, 214, 0.9);
+  box-shadow: 0 10px 28px rgba(37, 55, 45, 0.13);
+  transform: translateX(-50%);
+  backdrop-filter: blur(14px);
+}
+
+.fold-progress-heading,
+.fold-progress-heading label,
+.fold-progress-endpoints {
+  display: flex;
+  align-items: center;
+}
+
+.fold-progress-heading {
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.fold-progress-heading label {
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: -0.1px;
+}
+
+.fold-progress-heading output {
+  min-width: 43px;
+  max-width: 150px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 780;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.fold-progress-control input[type="range"] {
+  width: 100%;
+  height: 4px;
+  display: block;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.fold-progress-control input[type="range"]::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  border: 3px solid var(--canvas);
+  border-radius: 50%;
+  appearance: none;
+  background: var(--mint-deep);
+  box-shadow: 0 1px 5px rgba(17, 17, 17, 0.3);
+}
+
+.fold-progress-control input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 3px solid var(--canvas);
+  border-radius: 50%;
+  background: var(--mint-deep);
+  box-shadow: 0 1px 5px rgba(17, 17, 17, 0.3);
+}
+
+.fold-progress-endpoints {
+  justify-content: space-between;
+  margin-top: 6px;
+  color: #5d665f;
+  font-size: 8px;
+  font-weight: 680;
+}
+
 .dimension {
   position: absolute;
   z-index: 3;
@@ -641,6 +727,10 @@ select:focus-visible {
   left: 50%;
   bottom: 8%;
   transform: translateX(-50%);
+}
+
+.stage-canvas.mailer-preview .dimension-width {
+  bottom: 19%;
 }
 
 .dimension-width span {
@@ -1500,6 +1590,11 @@ select:focus-visible {
   .preview-panel {
     height: 460px;
     min-height: 460px;
+  }
+
+  .fold-progress-control {
+    bottom: 10px;
+    width: calc(100% - 24px);
   }
 
   .preview-actions .round-button:nth-child(2) {
