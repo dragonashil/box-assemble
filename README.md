@@ -2,6 +2,9 @@
 
 브라우저에서 박스 형태와 제작 사양을 선택하고, 접힘 과정과 예상 견적을 실시간으로 확인하는 Web3D 데모입니다.
 
+- Vercel 데모: https://box-assemble.vercel.app
+- Sites 데모: https://formbox-studio-demo.drdnrun.chatgpt.site
+
 ## 주요 기능
 
 - G형 메일러, 택배형, 서랍형 박스 선택
