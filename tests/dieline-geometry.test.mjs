@@ -7,7 +7,7 @@ import {
   createFlatLayout,
   panelShapePoints,
   translateBounds,
-} from "../app/box-model/layout.ts";
+} from "../app/box-model/dieline-layout.ts";
 import { createBoxBlueprint } from "../app/box-model/templates.ts";
 import {
   DEFAULT_ORBIT_ANGLES,

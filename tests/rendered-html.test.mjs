@@ -92,7 +92,10 @@ test("keeps named open poses constrained and exposes direct fold control", async
       new URL("../app/box-model/templates.ts", import.meta.url),
       "utf8",
     ),
-    readFile(new URL("../app/box-model/layout.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/box-model/dieline-layout.ts", import.meta.url),
+      "utf8",
+    ),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
