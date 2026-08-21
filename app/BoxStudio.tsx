@@ -44,9 +44,9 @@ const boxTypes: Array<{
   detail: string;
   icon: typeof Box;
 }> = [
-  { id: "mailer", name: "G형 택배박스", detail: "FEFCO 0427 · 롤엔드", icon: Box3 },
-  { id: "shipping", name: "A형 골판지박스", detail: "일반형 · 접착식", icon: Box },
-  { id: "drawer", name: "서랍형 패키지", detail: "슬리브 · 고급형", icon: Box2 },
+  { id: "mailer", name: "G형 택배박스", detail: "0427 계열 · 롤엔드", icon: Box3 },
+  { id: "shipping", name: "A형 골판지박스", detail: "0201 계열 · 접착식", icon: Box },
+  { id: "drawer", name: "서랍형 패키지", detail: "트레이 + 슬리브 · 2매", icon: Box2 },
 ];
 
 const materials: Array<{
@@ -163,9 +163,6 @@ export default function BoxStudio() {
 
   const handleBoxTypeChange = (nextBoxType: BoxType) => {
     setBoxType(nextBoxType);
-    if (nextBoxType !== "mailer" && viewMode === "folding") {
-      setViewMode("open");
-    }
   };
 
   const downloadQuote = () => {
@@ -204,7 +201,9 @@ export default function BoxStudio() {
           <span className="brand-tag">BETA</span>
         </div>
         <div className="project-title">
-          <strong>오브젝트 패키지 · G형</strong>
+          <strong>
+            오브젝트 패키지 · {boxTypes.find((item) => item.id === boxType)?.name}
+          </strong>
           <span><Check size={14} aria-hidden="true" /> 모든 변경사항 저장됨</span>
         </div>
         <nav className="header-actions" aria-label="프로젝트 메뉴">
@@ -370,48 +369,54 @@ export default function BoxStudio() {
               paper={paper}
               print={printType}
               autoRotate={autoRotate}
-              foldProgress={boxType === "mailer" ? foldProgress : undefined}
+              foldProgress={foldProgress}
             />
-            {boxType === "mailer" ? (
-              <div className="fold-progress-control">
-                <div className="fold-progress-heading">
-                  <label htmlFor="mailer-fold-progress">
-                    <Layer size={15} aria-hidden="true" />
-                    접힘 진행
-                  </label>
-                  <output htmlFor="mailer-fold-progress">
-                    {viewMode === "open"
-                      ? "몸체 100% · 뚜껑 열림"
-                      : `${Math.round(foldProgress * 100)}%`}
-                  </output>
-                </div>
-                <input
-                  id="mailer-fold-progress"
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={Math.round(foldProgress * 100)}
-                  onChange={handleFoldProgressChange}
-                  aria-valuetext={
-                    viewMode === "open"
-                      ? "몸체 완성, 뚜껑만 열림"
-                      : `${Math.round(foldProgress * 100)}% 접힘`
-                  }
-                  aria-describedby="mailer-fold-endpoints"
-                  style={{
-                    background: `linear-gradient(to right, var(--mint-deep) 0 ${foldProgress * 100}%, rgba(37, 95, 74, 0.18) ${foldProgress * 100}% 100%)`,
-                  }}
-                />
-                <div
-                  className="fold-progress-endpoints"
-                  id="mailer-fold-endpoints"
-                >
-                  <span>전개도</span>
-                  <span>완성</span>
-                </div>
+            <div className="fold-progress-control">
+              <div className="fold-progress-heading">
+                <label htmlFor="box-fold-progress">
+                  <Layer size={15} aria-hidden="true" />
+                  접힘 진행
+                </label>
+                <output htmlFor="box-fold-progress">
+                  {viewMode === "open"
+                    ? boxType === "mailer"
+                      ? "몸체 완성 · 뚜껑 열림"
+                      : boxType === "shipping"
+                        ? "몸체 완성 · 상부 열림"
+                        : "트레이 완성 · 서랍 열림"
+                    : `${Math.round(foldProgress * 100)}%`}
+                </output>
               </div>
-            ) : null}
+              <input
+                id="box-fold-progress"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={Math.round(foldProgress * 100)}
+                onChange={handleFoldProgressChange}
+                aria-valuetext={
+                  viewMode === "open"
+                    ? boxType === "mailer"
+                      ? "몸체 완성, 뚜껑만 열림"
+                      : boxType === "shipping"
+                        ? "몸체와 바닥 완성, 상부 플랩 열림"
+                        : "트레이와 슬리브 완성, 서랍 열림"
+                    : `${Math.round(foldProgress * 100)}% 접힘`
+                }
+                aria-describedby="box-fold-endpoints"
+                style={{
+                  background: `linear-gradient(to right, var(--mint-deep) 0 ${foldProgress * 100}%, rgba(37, 95, 74, 0.18) ${foldProgress * 100}% 100%)`,
+                }}
+              />
+              <div
+                className="fold-progress-endpoints"
+                id="box-fold-endpoints"
+              >
+                <span>전개도</span>
+                <span>완성</span>
+              </div>
+            </div>
             <div className="dimension dimension-width">
               <span />
               <b>{width} mm</b>
@@ -430,12 +435,12 @@ export default function BoxStudio() {
                 <i style={{ background: materials.find((item) => item.id === paper)?.swatch }} />
                 {materials.find((item) => item.id === paper)?.label}
               </span>
-              <span className="scale-chip">1:1 실측 비율</span>
+              <span className="scale-chip">치수 비례 유지</span>
             </div>
             <p>
               <Layer size={16} aria-hidden="true" />
               {boxType === "mailer"
-                ? "FEFCO 0427 전개도와 완성 상태가 동일한 힌지로 연결됩니다"
+                ? "오픈소스 기반 롤엔드 전개도와 3D가 동일한 힌지로 연결됩니다"
                 : "전개도와 완성 상태가 동일한 접힘선으로 연결됩니다"}
             </p>
           </div>
@@ -473,7 +478,10 @@ export default function BoxStudio() {
                         value={value as number}
                         onChange={(event) =>
                           (setter as (value: number) => void)(
-                            Math.max(40, Number(event.target.value)),
+                            Math.min(
+                              1000,
+                              Math.max(40, Number(event.target.value)),
+                            ),
                           )
                         }
                       />
