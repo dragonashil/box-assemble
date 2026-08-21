@@ -9,6 +9,12 @@ import {
   translateBounds,
 } from "../app/box-model/layout.ts";
 import { createBoxBlueprint } from "../app/box-model/templates.ts";
+import {
+  DEFAULT_ORBIT_ANGLES,
+  ORBIT_PITCH_LIMIT,
+  floorVisibilityForPitch,
+  orbitAnglesAfterDrag,
+} from "../app/box-model/view-controls.ts";
 
 const dimensions = { width: 3, depth: 2, height: 1.1, caliper: 0.02 };
 
@@ -124,4 +130,27 @@ test("keeps all template bounds finite across wide, tall and compact sizes", () 
       }
     }
   }
+});
+
+test("orbits far enough to inspect both the top and bottom panels", () => {
+  const topView = orbitAnglesAfterDrag(DEFAULT_ORBIT_ANGLES, 0, 1000);
+  const bottomView = orbitAnglesAfterDrag(DEFAULT_ORBIT_ANGLES, 0, -1000);
+
+  assert.equal(topView.pitch, ORBIT_PITCH_LIMIT);
+  assert.equal(bottomView.pitch, -ORBIT_PITCH_LIMIT);
+  assert.ok(topView.pitch > Math.PI / 3);
+  assert.ok(bottomView.pitch < -Math.PI / 3);
+  assert.equal(topView.yaw, DEFAULT_ORBIT_ANGLES.yaw);
+  assert.ok(floorVisibilityForPitch(topView.pitch) < 0.01);
+  assert.ok(floorVisibilityForPitch(bottomView.pitch) < 0.01);
+});
+
+test("maps horizontal and vertical pointer movement independently", () => {
+  const horizontal = orbitAnglesAfterDrag(DEFAULT_ORBIT_ANGLES, 120, 0);
+  const vertical = orbitAnglesAfterDrag(DEFAULT_ORBIT_ANGLES, 0, 120);
+
+  assert.notEqual(horizontal.yaw, DEFAULT_ORBIT_ANGLES.yaw);
+  assert.equal(horizontal.pitch, DEFAULT_ORBIT_ANGLES.pitch);
+  assert.equal(vertical.yaw, DEFAULT_ORBIT_ANGLES.yaw);
+  assert.notEqual(vertical.pitch, DEFAULT_ORBIT_ANGLES.pitch);
 });
