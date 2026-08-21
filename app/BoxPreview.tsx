@@ -2,8 +2,22 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import {
+  createFlatLayout,
+  edgeFrame,
+  panelShapePoints,
+} from "./box-model/layout.ts";
+import { createBoxBlueprint } from "./box-model/templates.ts";
+import type {
+  BlueprintBoxType,
+  BoxBlueprint,
+  EdgeName,
+  PanelNode,
+  PieceBlueprint,
+  Point2,
+} from "./box-model/types.ts";
 
-export type BoxType = "mailer" | "shipping" | "drawer";
+export type BoxType = BlueprintBoxType;
 export type FoldMode = "closed" | "open" | "dieline" | "folding";
 
 type BoxPreviewProps = {
@@ -19,27 +33,40 @@ type BoxPreviewProps = {
 };
 
 type Joint = {
-  role?: string;
+  id: string;
   group: THREE.Group;
-  axis: "x" | "y";
   angle: number;
   openAngle?: number;
-  phase: [number, number];
+  phase: readonly [number, number];
+};
+
+type CompiledPiece = {
+  blueprint: PieceBlueprint;
+  group: THREE.Group;
+  flatPosition: THREE.Vector3;
+  assemblyPosition: THREE.Vector3;
+  openPosition: THREE.Vector3;
 };
 
 type FoldModel = {
   group: THREE.Group;
   joints: Joint[];
+  pieces: CompiledPiece[];
   creaseLines: THREE.Line[];
-  update: (progress: number) => void;
-  openProgress: number;
-  flatZoom: number;
+  cutLines: Array<THREE.Line | THREE.LineSegments>;
+  applyPose: (
+    progress: number,
+    mode: FoldMode,
+    immediate: boolean,
+    delta: number,
+  ) => void;
 };
 
 type BuildContext = {
-  material: THREE.MeshStandardMaterial;
+  panelMaterial: THREE.MeshStandardMaterial;
   printMaterial: THREE.MeshBasicMaterial;
-  edgeMaterial: THREE.LineBasicMaterial;
+  printRuleMaterial: THREE.MeshBasicMaterial;
+  cutMaterial: THREE.LineBasicMaterial;
   creaseMaterial: THREE.LineDashedMaterial;
   geometries: Set<THREE.BufferGeometry>;
   materials: Set<THREE.Material>;
@@ -64,87 +91,75 @@ const smoothstep = (value: number) => {
   return t * t * (3 - 2 * t);
 };
 
-const phaseProgress = (progress: number, phase: [number, number]) =>
-  smoothstep((progress - phase[0]) / Math.max(0.001, phase[1] - phase[0]));
+const phaseProgress = (
+  progress: number,
+  phase: readonly [number, number],
+) => smoothstep((progress - phase[0]) / Math.max(0.001, phase[1] - phase[0]));
 
-function createPanel(
-  parent: THREE.Object3D,
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-  context: BuildContext,
-  printed = false,
-) {
-  const geometry = new THREE.PlaneGeometry(width, height);
-  context.geometries.add(geometry);
-  const panel = new THREE.Mesh(geometry, context.material);
-  panel.position.set(x, y, 0);
-  panel.castShadow = true;
-  panel.receiveShadow = true;
-  panel.renderOrder = 1;
-  parent.add(panel);
-
-  const edgeGeometry = new THREE.EdgesGeometry(geometry);
-  context.geometries.add(edgeGeometry);
-  const edge = new THREE.LineSegments(edgeGeometry, context.edgeMaterial);
-  edge.position.set(x, y, 0.003);
-  edge.renderOrder = 3;
-  parent.add(edge);
-
-  if (printed) {
-    const markGeometry = new THREE.PlaneGeometry(
-      Math.max(0.18, width * 0.46),
-      Math.max(0.1, height * 0.22),
-    );
-    context.geometries.add(markGeometry);
-    const mark = new THREE.Mesh(markGeometry, context.printMaterial);
-    mark.position.set(x, y, 0.006);
-    mark.renderOrder = 4;
-    parent.add(mark);
-
-    const ruleGeometry = new THREE.PlaneGeometry(
-      Math.max(0.1, width * 0.27),
-      Math.max(0.012, height * 0.014),
-    );
-    context.geometries.add(ruleGeometry);
-    const rule = new THREE.Mesh(
-      ruleGeometry,
-      new THREE.MeshBasicMaterial({
-        color: 0xfff8eb,
-        transparent: true,
-        opacity: context.printMaterial.opacity > 0.1 ? 0.82 : 0,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
-    );
-    context.materials.add(rule.material);
-    rule.position.set(x, y, 0.008);
-    rule.renderOrder = 5;
-    parent.add(rule);
-  }
-
-  return panel;
+function makeShape(points: readonly Point2[]) {
+  const shape = new THREE.Shape();
+  shape.moveTo(points[0][0], points[0][1]);
+  points.slice(1).forEach(([x, y]) => shape.lineTo(x, y));
+  shape.closePath();
+  return shape;
 }
 
-function createCrease(
+function addLineSegments(
+  parent: THREE.Object3D,
+  segments: readonly (readonly [Point2, Point2])[],
+  z: number,
+  material: THREE.LineBasicMaterial,
+  context: BuildContext,
+) {
+  if (!segments.length) return;
+  const vertices = segments.flatMap(([start, end]) => [
+    start[0],
+    start[1],
+    z,
+    end[0],
+    end[1],
+    z,
+  ]);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(vertices, 3),
+  );
+  context.geometries.add(geometry);
+  const lines = new THREE.LineSegments(geometry, material);
+  lines.renderOrder = 5;
+  parent.add(lines);
+  return lines;
+}
+
+function addPolyline(
+  parent: THREE.Object3D,
+  points: readonly Point2[],
+  z: number,
+  material: THREE.LineBasicMaterial,
+  context: BuildContext,
+) {
+  if (points.length < 2) return;
+  const geometry = new THREE.BufferGeometry().setFromPoints(
+    points.map(([x, y]) => new THREE.Vector3(x, y, z)),
+  );
+  context.geometries.add(geometry);
+  const line = new THREE.Line(geometry, material);
+  line.renderOrder = 5;
+  parent.add(line);
+  return line;
+}
+
+function addCrease(
   parent: THREE.Object3D,
   length: number,
-  axis: "x" | "y",
   context: BuildContext,
   creaseLines: THREE.Line[],
 ) {
-  const points =
-    axis === "x"
-      ? [
-          new THREE.Vector3(-length / 2, 0, 0.007),
-          new THREE.Vector3(length / 2, 0, 0.007),
-        ]
-      : [
-          new THREE.Vector3(0, -length / 2, 0.007),
-          new THREE.Vector3(0, length / 2, 0.007),
-        ];
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const geometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0.009),
+    new THREE.Vector3(length, 0, 0.009),
+  ]);
   context.geometries.add(geometry);
   const line = new THREE.Line(geometry, context.creaseMaterial);
   line.computeLineDistances();
@@ -153,658 +168,277 @@ function createCrease(
   creaseLines.push(line);
 }
 
-type FlapOptions = {
-  parent: THREE.Object3D;
-  anchor: [number, number];
-  heading?: number;
-  width: number;
-  span: number;
-  angle: number;
-  phase: [number, number];
-  context: BuildContext;
-  joints: Joint[];
-  creaseLines: THREE.Line[];
-  printed?: boolean;
-  role?: string;
-  openAngle?: number;
-};
-
-function createFlap({
-  parent,
-  anchor,
-  heading = 0,
-  width,
-  span,
-  angle,
-  phase,
-  context,
-  joints,
-  creaseLines,
-  printed = false,
-  role,
-  openAngle,
-}: FlapOptions) {
-  const anchorGroup = new THREE.Group();
-  anchorGroup.position.set(anchor[0], anchor[1], 0);
-  anchorGroup.rotation.z = heading;
-  parent.add(anchorGroup);
-
-  const foldGroup = new THREE.Group();
-  anchorGroup.add(foldGroup);
-  createPanel(foldGroup, width, span, 0, span / 2, context, printed);
-  createCrease(anchorGroup, width, "x", context, creaseLines);
-  joints.push({
-    role,
-    group: foldGroup,
-    axis: "x",
-    angle,
-    openAngle,
-    phase,
-  });
-  return foldGroup;
-}
-
-type SeamOptions = {
-  parent: THREE.Object3D;
-  anchor: [number, number];
-  span: number;
-  height: number;
-  angle: number;
-  phase: [number, number];
-  context: BuildContext;
-  joints: Joint[];
-  creaseLines: THREE.Line[];
-  printed?: boolean;
-  centered?: boolean;
-  role?: string;
-  openAngle?: number;
-};
-
-function createSeam({
-  parent,
-  anchor,
-  span,
-  height,
-  angle,
-  phase,
-  context,
-  joints,
-  creaseLines,
-  printed = false,
-  centered = false,
-  role,
-  openAngle,
-}: SeamOptions) {
-  const anchorGroup = new THREE.Group();
-  anchorGroup.position.set(anchor[0], anchor[1], 0);
-  parent.add(anchorGroup);
-
-  const foldGroup = new THREE.Group();
-  anchorGroup.add(foldGroup);
-  createPanel(
-    foldGroup,
-    span,
-    height,
-    span / 2,
-    centered ? 0 : height / 2,
-    context,
-    printed,
-  );
-  createCrease(anchorGroup, height, "y", context, creaseLines);
-  joints.push({
-    role,
-    group: foldGroup,
-    axis: "y",
-    angle,
-    openAngle,
-    phase,
-  });
-  return foldGroup;
-}
-
-function buildMailer(
+function panelBoundarySegments(
+  node: PanelNode,
   width: number,
-  depth: number,
-  height: number,
-  context: BuildContext,
-): FoldModel {
-  const group = new THREE.Group();
-  const joints: Joint[] = [];
-  const creaseLines: THREE.Line[] = [];
-  createPanel(group, width, depth, 0, 0, context);
+  isRoot: boolean,
+) {
+  const points = panelShapePoints(node.shape, width, node.span);
+  const connected = new Set<EdgeName>();
+  node.children?.forEach((child) => {
+    if (child.edge) connected.add(child.edge);
+  });
+  if (!isRoot) connected.add("near");
 
-  const common = { context, joints, creaseLines };
-  // FOLD-inspired rigid linkage: every paper face is attached to its parent
-  // along one crease edge. The open pose is a separate constrained frame:
-  // every body/lid-child hinge stays assembled and only lidHinge returns to 0°.
-  const back = createFlap({
-    ...common,
-    role: "backWall",
-    parent: group,
-    anchor: [0, depth / 2],
-    width,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.04, 0.36],
-  });
-  const front = createFlap({
-    ...common,
-    role: "frontWall",
-    parent: group,
-    anchor: [0, -depth / 2],
-    heading: Math.PI,
-    width,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.07, 0.39],
-    printed: true,
-  });
-  const left = createFlap({
-    ...common,
-    role: "leftWall",
-    parent: group,
-    anchor: [-width / 2, 0],
-    heading: Math.PI / 2,
-    width: depth,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.12, 0.44],
-  });
-  const right = createFlap({
-    ...common,
-    role: "rightWall",
-    parent: group,
-    anchor: [width / 2, 0],
-    heading: -Math.PI / 2,
-    width: depth,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.12, 0.44],
-  });
+  if ((node.shape ?? "rect") === "rect") {
+    const segments: Array<readonly [Point2, Point2]> = [];
+    if (!connected.has("near")) {
+      segments.push([
+        [0, 0],
+        [width, 0],
+      ]);
+    }
+    if (!connected.has("far")) {
+      segments.push([
+        [0, node.span],
+        [width, node.span],
+      ]);
+    }
+    if (!connected.has("xmin")) {
+      segments.push([
+        [0, 0],
+        [0, node.span],
+      ]);
+    }
+    if (!connected.has("xmax")) {
+      segments.push([
+        [width, 0],
+        [width, node.span],
+      ]);
+    }
+    return segments;
+  }
 
-  // Front/back corner flaps rise first and are captured inside the rolled
-  // double side walls, matching the physical 0427 assembly order.
-  const cornerSpan = height * 0.86;
-  (
-    [
-      [front, "frontLeftCorner", -width / 2, Math.PI / 2],
-      [front, "frontRightCorner", width / 2, -Math.PI / 2],
-      [back, "backLeftCorner", -width / 2, Math.PI / 2],
-      [back, "backRightCorner", width / 2, -Math.PI / 2],
-    ] as const
-  ).forEach(([parent, role, anchorX, heading]) => {
-    createFlap({
-      ...common,
-      role,
-      parent,
-      anchor: [anchorX, height / 2],
-      heading,
-      width: height,
-      span: cornerSpan,
-      angle: Math.PI / 2,
-      phase: [0.02, 0.22],
-    });
+  const segments: Array<readonly [Point2, Point2]> = [];
+  points.forEach((point, index) => {
+    const next = points[(index + 1) % points.length];
+    if (!isRoot && index === 0) return;
+    segments.push([point, next]);
   });
-
-  // FEFCO 0427-style roll ends: outer wall → top rail → inner wall → lock.
-  // Keeping this as a true hinge chain makes the flat blank and assembled
-  // double wall use the exact same faces without translating any panel.
-  const railSpan = Math.max(
-    height * 0.08,
-    Math.min(height * 0.18, depth * 0.1),
-  );
-  const leftRail = createFlap({
-    ...common,
-    role: "leftTopRail",
-    parent: left,
-    anchor: [0, height],
-    width: depth,
-    span: railSpan,
-    angle: Math.PI / 2,
-    phase: [0.36, 0.52],
-  });
-  const leftInnerWall = createFlap({
-    ...common,
-    role: "leftInnerWall",
-    parent: leftRail,
-    anchor: [0, railSpan],
-    width: depth,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.46, 0.64],
-  });
-  createFlap({
-    ...common,
-    role: "leftBodyLock",
-    parent: leftInnerWall,
-    anchor: [0, height],
-    width: depth * 0.72,
-    span: railSpan,
-    angle: Math.PI / 2,
-    phase: [0.56, 0.7],
-  });
-
-  const rightRail = createFlap({
-    ...common,
-    role: "rightTopRail",
-    parent: right,
-    anchor: [0, height],
-    width: depth,
-    span: railSpan,
-    angle: Math.PI / 2,
-    phase: [0.36, 0.52],
-  });
-  const rightInnerWall = createFlap({
-    ...common,
-    role: "rightInnerWall",
-    parent: rightRail,
-    anchor: [0, railSpan],
-    width: depth,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.46, 0.64],
-  });
-  createFlap({
-    ...common,
-    role: "rightBodyLock",
-    parent: rightInnerWall,
-    anchor: [0, height],
-    width: depth * 0.72,
-    span: railSpan,
-    angle: Math.PI / 2,
-    phase: [0.56, 0.7],
-  });
-
-  const frontRail = createFlap({
-    ...common,
-    role: "frontTopRail",
-    parent: front,
-    anchor: [0, height],
-    width,
-    span: railSpan,
-    angle: Math.PI / 2,
-    phase: [0.4, 0.56],
-  });
-  createFlap({
-    ...common,
-    role: "frontReceiver",
-    parent: frontRail,
-    anchor: [0, railSpan],
-    width: width * 0.86,
-    span: height * 0.72,
-    angle: Math.PI / 2,
-    phase: [0.5, 0.68],
-  });
-
-  const lid = createFlap({
-    ...common,
-    role: "lidHinge",
-    parent: back,
-    anchor: [0, height],
-    width,
-    span: depth,
-    angle: Math.PI / 2,
-    openAngle: 0,
-    phase: [0.78, 0.98],
-    printed: true,
-  });
-  const wingSpan = Math.min(height * 0.86, width * 0.2);
-  createFlap({
-    ...common,
-    role: "leftLidWing",
-    parent: lid,
-    anchor: [-width / 2, depth / 2],
-    heading: Math.PI / 2,
-    width: depth,
-    span: wingSpan,
-    angle: Math.PI / 2,
-    phase: [0.56, 0.74],
-  });
-  createFlap({
-    ...common,
-    role: "rightLidWing",
-    parent: lid,
-    anchor: [width / 2, depth / 2],
-    heading: -Math.PI / 2,
-    width: depth,
-    span: wingSpan,
-    angle: Math.PI / 2,
-    phase: [0.56, 0.74],
-  });
-  const tuckSpan = height * 0.82;
-  const tuck = createFlap({
-    ...common,
-    role: "tuckFlap",
-    parent: lid,
-    anchor: [0, depth],
-    width,
-    span: tuckSpan,
-    angle: Math.PI / 2,
-    phase: [0.62, 0.78],
-  });
-  const cherryEarSpan = Math.min(height * 0.22, width * 0.07);
-  createFlap({
-    ...common,
-    role: "leftCherryEar",
-    parent: tuck,
-    anchor: [-width / 2, tuckSpan / 2],
-    heading: Math.PI / 2,
-    width: tuckSpan,
-    span: cherryEarSpan,
-    angle: Math.PI / 2,
-    phase: [0.58, 0.74],
-  });
-  createFlap({
-    ...common,
-    role: "rightCherryEar",
-    parent: tuck,
-    anchor: [width / 2, tuckSpan / 2],
-    heading: -Math.PI / 2,
-    width: tuckSpan,
-    span: cherryEarSpan,
-    angle: Math.PI / 2,
-    phase: [0.58, 0.74],
-  });
-
-  return {
-    group,
-    joints,
-    creaseLines,
-    openProgress: 1,
-    flatZoom: 0.56,
-    update: () => undefined,
-  };
+  return segments;
 }
 
-function addShippingFlaps(
-  face: THREE.Object3D,
-  centerX: number,
-  faceWidth: number,
-  height: number,
-  flapSpan: number,
-  small: boolean,
+function createPanelVisual(
+  parent: THREE.Object3D,
+  node: PanelNode,
+  width: number,
+  isRoot: boolean,
+  context: BuildContext,
+  cutLines: Array<THREE.Line | THREE.LineSegments>,
+) {
+  const points = panelShapePoints(node.shape, width, node.span);
+  const geometry = new THREE.ShapeGeometry(makeShape(points));
+  context.geometries.add(geometry);
+  const panel = new THREE.Mesh(geometry, context.panelMaterial);
+  panel.position.z = (node.layer ?? 0) * 0.003;
+  panel.castShadow = true;
+  panel.receiveShadow = true;
+  panel.renderOrder = 1;
+  parent.add(panel);
+
+  const boundary = addLineSegments(
+    parent,
+    panelBoundarySegments(node, width, isRoot),
+    0.007 + (node.layer ?? 0) * 0.003,
+    context.cutMaterial,
+    context,
+  );
+  if (boundary) cutLines.push(boundary);
+
+  node.detailCuts?.forEach((detail) => {
+    const line = addPolyline(
+      parent,
+      detail,
+      0.01,
+      context.cutMaterial,
+      context,
+    );
+    if (line) cutLines.push(line);
+  });
+
+  if (node.printed) {
+    const markWidth = Math.max(0.16, width * 0.42);
+    const markHeight = Math.max(
+      0.08,
+      Math.min(node.span * 0.21, markWidth * 0.3),
+    );
+    const markGeometry = new THREE.PlaneGeometry(markWidth, markHeight);
+    markGeometry.translate(width / 2, node.span / 2, 0);
+    context.geometries.add(markGeometry);
+    const mark = new THREE.Mesh(markGeometry, context.printMaterial);
+    mark.position.z = 0.012;
+    mark.renderOrder = 7;
+    parent.add(mark);
+
+    const ruleGeometry = new THREE.PlaneGeometry(
+      Math.max(0.08, markWidth * 0.58),
+      Math.max(0.01, markHeight * 0.08),
+    );
+    ruleGeometry.translate(width / 2, node.span / 2, 0);
+    context.geometries.add(ruleGeometry);
+    const rule = new THREE.Mesh(ruleGeometry, context.printRuleMaterial);
+    rule.position.z = 0.014;
+    rule.renderOrder = 8;
+    parent.add(rule);
+  }
+}
+
+function buildChildNode(
+  parent: THREE.Object3D,
+  parentWidth: number,
+  parentSpan: number,
+  node: PanelNode,
   context: BuildContext,
   joints: Joint[],
   creaseLines: THREE.Line[],
+  cutLines: Array<THREE.Line | THREE.LineSegments>,
 ) {
-  const common = { context, joints, creaseLines };
-  createFlap({
-    ...common,
-    parent: face,
-    anchor: [centerX, height],
-    width: faceWidth,
-    span: flapSpan,
-    angle: -Math.PI / 2,
-    phase: small ? [0.68, 0.82] : [0.8, 1],
+  if (!node.edge) return;
+  const frame = edgeFrame(parentWidth, parentSpan, node.edge);
+  const anchor = new THREE.Group();
+  anchor.position.set(frame.x, frame.y, 0);
+  anchor.rotation.z = frame.rotation;
+  parent.add(anchor);
+  addCrease(anchor, frame.length, context, creaseLines);
+
+  const foldGroup = new THREE.Group();
+  anchor.add(foldGroup);
+  createPanelVisual(
+    foldGroup,
+    node,
+    frame.length,
+    false,
+    context,
+    cutLines,
+  );
+  joints.push({
+    id: node.id,
+    group: foldGroup,
+    angle: node.angle ?? Math.PI / 2,
+    openAngle: node.openAngle,
+    phase: node.phase ?? [0, 1],
   });
-  createFlap({
-    ...common,
-    parent: face,
-    anchor: [centerX, 0],
-    heading: Math.PI,
-    width: faceWidth,
-    span: flapSpan,
-    angle: Math.PI / 2,
-    phase: small ? [0.39, 0.5] : [0.48, 0.62],
+
+  node.children?.forEach((child) => {
+    buildChildNode(
+      foldGroup,
+      frame.length,
+      node.span,
+      child,
+      context,
+      joints,
+      creaseLines,
+      cutLines,
+    );
   });
 }
 
-function buildShipping(
-  width: number,
-  depth: number,
-  height: number,
+function compileFoldModel(
+  blueprint: BoxBlueprint,
   context: BuildContext,
 ): FoldModel {
   const group = new THREE.Group();
   const joints: Joint[] = [];
   const creaseLines: THREE.Line[] = [];
-  const common = { context, joints, creaseLines };
+  const cutLines: Array<THREE.Line | THREE.LineSegments> = [];
+  const gap = Math.max(
+    0.24,
+    Math.min(blueprint.dimensions.width, blueprint.dimensions.depth) * 0.16,
+  );
+  const placements = new Map(
+    createFlatLayout(blueprint.pieces, gap).map((item) => [item.id, item]),
+  );
+  const pieces: CompiledPiece[] = [];
 
-  // RSC/A-type boxes are a continuous four-panel strip, not a cross net.
-  const front = createFlap({
-    ...common,
-    parent: group,
-    anchor: [0, -depth / 2],
-    width,
-    span: height,
-    angle: Math.PI / 2,
-    phase: [0.04, 0.2],
-    printed: true,
-  });
-  const right = createSeam({
-    ...common,
-    parent: front,
-    anchor: [width / 2, 0],
-    span: depth,
-    height,
-    angle: Math.PI / 2,
-    phase: [0.16, 0.3],
-  });
-  const back = createSeam({
-    ...common,
-    parent: right,
-    anchor: [depth, 0],
-    span: width,
-    height,
-    angle: Math.PI / 2,
-    phase: [0.22, 0.37],
-  });
-  const left = createSeam({
-    ...common,
-    parent: back,
-    anchor: [width, 0],
-    span: depth,
-    height,
-    angle: Math.PI / 2,
-    phase: [0.29, 0.44],
-  });
-  createSeam({
-    ...common,
-    parent: left,
-    anchor: [depth, 0],
-    span: Math.max(0.08, height * 0.12),
-    height,
-    angle: Math.PI / 2,
-    phase: [0.36, 0.48],
+  blueprint.pieces.forEach((pieceBlueprint) => {
+    const pieceGroup = new THREE.Group();
+    pieceGroup.name = pieceBlueprint.id;
+    group.add(pieceGroup);
+    const rootWidth = pieceBlueprint.root.width ?? 0;
+    createPanelVisual(
+      pieceGroup,
+      pieceBlueprint.root,
+      rootWidth,
+      true,
+      context,
+      cutLines,
+    );
+    pieceBlueprint.root.children?.forEach((child) => {
+      buildChildNode(
+        pieceGroup,
+        rootWidth,
+        pieceBlueprint.root.span,
+        child,
+        context,
+        joints,
+        creaseLines,
+        cutLines,
+      );
+    });
+
+    const placement = placements.get(pieceBlueprint.id);
+    const flatPosition = new THREE.Vector3(
+      placement?.position[0] ?? 0,
+      placement?.position[1] ?? 0,
+      0,
+    );
+    const assemblyPosition = new THREE.Vector3(
+      ...pieceBlueprint.assemblyPosition,
+    );
+    const openPosition = new THREE.Vector3(
+      ...(pieceBlueprint.openPosition ?? pieceBlueprint.assemblyPosition),
+    );
+    pieceGroup.position.copy(flatPosition);
+    pieces.push({
+      blueprint: pieceBlueprint,
+      group: pieceGroup,
+      flatPosition,
+      assemblyPosition,
+      openPosition,
+    });
   });
 
-  addShippingFlaps(
-    front,
-    0,
-    width,
-    height,
-    depth / 2,
-    false,
-    context,
-    joints,
-    creaseLines,
-  );
-  addShippingFlaps(
-    right,
-    depth / 2,
-    depth,
-    height,
-    width / 2,
-    true,
-    context,
-    joints,
-    creaseLines,
-  );
-  addShippingFlaps(
-    back,
-    width / 2,
-    width,
-    height,
-    depth / 2,
-    false,
-    context,
-    joints,
-    creaseLines,
-  );
-  addShippingFlaps(
-    left,
-    depth / 2,
-    depth,
-    height,
-    width / 2,
-    true,
-    context,
-    joints,
-    creaseLines,
-  );
+  const target = new THREE.Vector3();
+  const applyPose = (
+    progress: number,
+    mode: FoldMode,
+    immediate: boolean,
+    delta: number,
+  ) => {
+    const easing = immediate ? 1 : 1 - Math.pow(0.00015, delta);
+    joints.forEach((joint) => {
+      const foldedAngle =
+        (mode === "open" ? (joint.openAngle ?? joint.angle) : joint.angle) *
+        phaseProgress(progress, joint.phase);
+      joint.group.rotation.x = immediate
+        ? foldedAngle
+        : THREE.MathUtils.lerp(
+            joint.group.rotation.x,
+            foldedAngle,
+            easing,
+          );
+    });
 
-  return {
-    group,
-    joints,
-    creaseLines,
-    openProgress: 0.64,
-    flatZoom: 0.56,
-    update: () => undefined,
+    pieces.forEach((piece) => {
+      const assembly = phaseProgress(
+        progress,
+        piece.blueprint.assemblyPhase ?? [0.12, 0.72],
+      );
+      const destination =
+        mode === "open" ? piece.openPosition : piece.assemblyPosition;
+      target.lerpVectors(piece.flatPosition, destination, assembly);
+      if (immediate) piece.group.position.copy(target);
+      else piece.group.position.lerp(target, easing);
+    });
   };
+
+  return { group, joints, pieces, creaseLines, cutLines, applyPose };
 }
 
-function buildDrawer(
-  width: number,
-  depth: number,
-  height: number,
-  context: BuildContext,
-): FoldModel {
-  const group = new THREE.Group();
-  const joints: Joint[] = [];
-  const creaseLines: THREE.Line[] = [];
-  const common = { context, joints, creaseLines };
-  const tray = new THREE.Group();
-  group.add(tray);
-
-  const clearance = Math.min(width, depth) * 0.025;
-  const trayWidth = Math.max(0.2, width - clearance * 2);
-  const trayDepth = Math.max(0.2, depth - clearance * 2);
-  const trayHeight = height * 0.68;
-  createPanel(tray, trayWidth, trayDepth, 0, 0, context, true);
-  createFlap({
-    ...common,
-    parent: tray,
-    anchor: [0, trayDepth / 2],
-    width: trayWidth,
-    span: trayHeight,
-    angle: Math.PI / 2,
-    phase: [0.06, 0.37],
-  });
-  createFlap({
-    ...common,
-    parent: tray,
-    anchor: [0, -trayDepth / 2],
-    heading: Math.PI,
-    width: trayWidth,
-    span: trayHeight,
-    angle: Math.PI / 2,
-    phase: [0.06, 0.37],
-  });
-  createFlap({
-    ...common,
-    parent: tray,
-    anchor: [-trayWidth / 2, 0],
-    heading: Math.PI / 2,
-    width: trayDepth,
-    span: trayHeight,
-    angle: Math.PI / 2,
-    phase: [0.12, 0.43],
-  });
-  createFlap({
-    ...common,
-    parent: tray,
-    anchor: [trayWidth / 2, 0],
-    heading: -Math.PI / 2,
-    width: trayDepth,
-    span: trayHeight,
-    angle: Math.PI / 2,
-    phase: [0.12, 0.43],
-  });
-
-  // The sleeve is a second, independent dieline: top → side → bottom → side.
-  const sleeve = new THREE.Group();
-  group.add(sleeve);
-  createPanel(sleeve, depth, width, 0, 0, context, true);
-  const sleeveRight = createSeam({
-    ...common,
-    parent: sleeve,
-    anchor: [depth / 2, 0],
-    span: height,
-    height: width,
-    angle: Math.PI / 2,
-    phase: [0.12, 0.34],
-    centered: true,
-  });
-  const sleeveBottom = createSeam({
-    ...common,
-    parent: sleeveRight,
-    anchor: [height, 0],
-    span: depth,
-    height: width,
-    angle: Math.PI / 2,
-    phase: [0.22, 0.44],
-    centered: true,
-  });
-  const sleeveLeft = createSeam({
-    ...common,
-    parent: sleeveBottom,
-    anchor: [depth, 0],
-    span: height,
-    height: width,
-    angle: Math.PI / 2,
-    phase: [0.32, 0.54],
-    centered: true,
-  });
-  createSeam({
-    ...common,
-    parent: sleeveLeft,
-    anchor: [height, 0],
-    span: Math.max(0.08, height * 0.12),
-    height: width,
-    angle: Math.PI / 2,
-    phase: [0.42, 0.58],
-    centered: true,
-  });
-
-  const flatSleeveX = -(width / 2 + depth + height * 1.1);
-  const flatSleeveY = depth * 0.72;
-  const update = (progress: number) => {
-    const assemble = phaseProgress(progress, [0.04, 0.56]);
-    sleeve.position.x = THREE.MathUtils.lerp(flatSleeveX, 0, assemble);
-    sleeve.position.y = THREE.MathUtils.lerp(flatSleeveY, 0, assemble);
-    sleeve.position.z = THREE.MathUtils.lerp(0.012, height, assemble);
-    sleeve.rotation.z = THREE.MathUtils.lerp(0, -Math.PI / 2, assemble);
-
-    const trayVisible = phaseProgress(progress, [0.28, 0.56]);
-    const insert = phaseProgress(progress, [0.72, 1]);
-    tray.position.y = -depth * 0.78 * trayVisible * (1 - insert);
-    tray.position.z = 0.012;
-  };
-
-  return {
-    group,
-    joints,
-    creaseLines,
-    openProgress: 0.7,
-    flatZoom: 0.58,
-    update,
-  };
-}
-
-function buildFoldModel(
-  boxType: BoxType,
-  width: number,
-  depth: number,
-  height: number,
-  context: BuildContext,
-) {
-  if (boxType === "shipping") {
-    return buildShipping(width, depth, height, context);
-  }
-  if (boxType === "drawer") {
-    return buildDrawer(width, depth, height, context);
-  }
-  return buildMailer(width, depth, height, context);
+function initialProgress(mode: FoldMode, foldProgress?: number) {
+  if (mode === "dieline") return 0;
+  if (mode === "folding") return clamp01(foldProgress ?? 0);
+  return 1;
 }
 
 export default function BoxPreview({
@@ -840,9 +474,10 @@ export default function BoxPreview({
     if (!mount) return;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
-    camera.position.set(6.8, 5.4, 8.6);
-    camera.lookAt(0, 0.85, 0);
+    const perspectiveCamera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+    perspectiveCamera.up.set(0, 1, 0);
+    const flatCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+    flatCamera.up.set(0, 1, 0);
 
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
@@ -852,34 +487,31 @@ export default function BoxPreview({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     mount.appendChild(renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x66736a, 2.5));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 3.3);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x66736a, 2.55));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 3.2);
     keyLight.position.set(4, 8, 5);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
     scene.add(keyLight);
-    const rimLight = new THREE.DirectionalLight(0xd9fff0, 1.1);
+    const rimLight = new THREE.DirectionalLight(0xd9fff0, 1.05);
     rimLight.position.set(-5, 3, -4);
     scene.add(rimLight);
 
     const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(5.2, 64),
+      new THREE.CircleGeometry(5.4, 64),
       new THREE.ShadowMaterial({ color: 0x26342d, opacity: 0.14 }),
     );
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = -0.02;
+    floor.position.y = -0.025;
     floor.receiveShadow = true;
     scene.add(floor);
 
-    const geometries = new Set<THREE.BufferGeometry>();
-    const materialsSet = new Set<THREE.Material>();
-    geometries.add(floor.geometry);
-    materialsSet.add(floor.material);
-
-    const material = new THREE.MeshStandardMaterial({
+    const geometries = new Set<THREE.BufferGeometry>([floor.geometry]);
+    const materials = new Set<THREE.Material>([floor.material]);
+    const panelMaterial = new THREE.MeshStandardMaterial({
       color: paperColors[paper],
       roughness: paper === "white" ? 0.66 : 0.86,
       metalness: 0,
@@ -891,59 +523,73 @@ export default function BoxPreview({
     const printMaterial = new THREE.MeshBasicMaterial({
       color: printColors[print],
       transparent: true,
-      opacity: print === "none" ? 0.06 : 0.9,
+      opacity: print === "none" ? 0.035 : 0.9,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
-    const edgeMaterial = new THREE.LineBasicMaterial({
-      color: paper === "white" ? 0x8f8b83 : 0x694b2e,
+    const printRuleMaterial = new THREE.MeshBasicMaterial({
+      color: 0xfff8eb,
       transparent: true,
-      opacity: 0.72,
+      opacity: print === "none" ? 0 : 0.82,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const cutMaterial = new THREE.LineBasicMaterial({
+      color: paper === "white" ? 0x69655e : 0x593f29,
+      transparent: true,
+      opacity: 0.88,
       depthWrite: false,
     });
     const creaseMaterial = new THREE.LineDashedMaterial({
       color: 0xc43f78,
-      dashSize: 0.08,
-      gapSize: 0.055,
+      dashSize: 0.075,
+      gapSize: 0.05,
       transparent: true,
-      opacity: 0.78,
+      opacity: 0.82,
       depthWrite: false,
     });
-    [material, printMaterial, edgeMaterial, creaseMaterial].forEach((item) =>
-      materialsSet.add(item),
-    );
-    const context: BuildContext = {
-      material,
+    [
+      panelMaterial,
       printMaterial,
-      edgeMaterial,
+      printRuleMaterial,
+      cutMaterial,
+      creaseMaterial,
+    ].forEach((item) => materials.add(item));
+    const context: BuildContext = {
+      panelMaterial,
+      printMaterial,
+      printRuleMaterial,
+      cutMaterial,
       creaseMaterial,
       geometries,
-      materials: materialsSet,
+      materials,
     };
 
     const scale = 3.05 / Math.max(width, depth, height);
-    const w = width * scale;
-    const d = depth * scale;
-    const h = height * scale;
-    const foldModel = buildFoldModel(boxType, w, d, h, context);
+    const caliperMm = paper === "green" ? 1.2 : 1.5;
+    const blueprint = createBoxBlueprint(
+      boxType,
+      width * scale,
+      depth * scale,
+      height * scale,
+      caliperMm * scale,
+    );
+    const foldModel = compileFoldModel(blueprint, context);
 
     const viewGroup = new THREE.Group();
-    viewGroup.rotation.y = -0.46;
-    viewGroup.rotation.x = -0.07;
     scene.add(viewGroup);
-
     const modelRoot = new THREE.Group();
-    modelRoot.rotation.x = -Math.PI / 2;
-    modelRoot.position.y = 0.035;
     modelRoot.add(foldModel.group);
     viewGroup.add(modelRoot);
 
     let dragging = false;
     let previousX = 0;
     let previousY = 0;
+    let userYaw = -0.46;
     let userPitch = -0.07;
 
     const handlePointerDown = (event: PointerEvent) => {
+      if (targetModeRef.current === "dieline") return;
       dragging = true;
       previousX = event.clientX;
       previousY = event.clientY;
@@ -952,11 +598,11 @@ export default function BoxPreview({
     };
     const handlePointerMove = (event: PointerEvent) => {
       if (!dragging) return;
-      viewGroup.rotation.y += (event.clientX - previousX) * 0.008;
+      userYaw += (event.clientX - previousX) * 0.008;
       userPitch = THREE.MathUtils.clamp(
         userPitch + (event.clientY - previousY) * 0.004,
-        -0.45,
-        0.28,
+        -0.42,
+        0.24,
       );
       previousX = event.clientX;
       previousY = event.clientY;
@@ -966,51 +612,118 @@ export default function BoxPreview({
       if (renderer.domElement.hasPointerCapture(event.pointerId)) {
         renderer.domElement.releasePointerCapture(event.pointerId);
       }
-      renderer.domElement.style.cursor = "grab";
+      renderer.domElement.style.cursor =
+        targetModeRef.current === "dieline" ? "default" : "grab";
     };
 
-    renderer.domElement.style.cursor = "grab";
+    renderer.domElement.style.cursor =
+      targetModeRef.current === "dieline" ? "default" : "grab";
     renderer.domElement.style.touchAction = "none";
     renderer.domElement.addEventListener("pointerdown", handlePointerDown);
     renderer.domElement.addEventListener("pointermove", handlePointerMove);
     renderer.domElement.addEventListener("pointerup", handlePointerUp);
     renderer.domElement.addEventListener("pointercancel", handlePointerUp);
 
+    let viewportAspect = 1;
     const resize = () => {
       const { clientWidth, clientHeight } = mount;
       if (!clientWidth || !clientHeight) return;
       renderer.setSize(clientWidth, clientHeight, false);
-      camera.aspect = clientWidth / clientHeight;
-      camera.updateProjectionMatrix();
+      viewportAspect = clientWidth / clientHeight;
+      perspectiveCamera.aspect = viewportAspect;
+      perspectiveCamera.updateProjectionMatrix();
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mount);
     resize();
 
-    let animationFrame = 0;
-    let currentProgress = 0;
-    const reducedMotion = window.matchMedia(
-      "(prefers-reduced-motion: reduce)",
-    ).matches;
-    const clock = new THREE.Clock();
+    const bounds = new THREE.Box3();
+    const boundsSize = new THREE.Vector3();
+    const boundsCenter = new THREE.Vector3();
+    const cameraFocus = new THREE.Vector3();
+    const cameraDirection = new THREE.Vector3(1.15, 0.88, 1.5).normalize();
+    let cameraDistance = 9;
+
+    const frameFlat = () => {
+      viewGroup.updateMatrixWorld(true);
+      bounds.setFromObject(viewGroup);
+      bounds.getSize(boundsSize);
+      bounds.getCenter(boundsCenter);
+      const halfHeight =
+        Math.max(boundsSize.y / 2, boundsSize.x / (2 * viewportAspect), 0.4) *
+        1.13;
+      flatCamera.left = -halfHeight * viewportAspect;
+      flatCamera.right = halfHeight * viewportAspect;
+      flatCamera.top = halfHeight;
+      flatCamera.bottom = -halfHeight;
+      flatCamera.position.set(
+        boundsCenter.x,
+        boundsCenter.y,
+        Math.max(8, boundsSize.length() * 2),
+      );
+      flatCamera.lookAt(boundsCenter.x, boundsCenter.y, 0);
+      flatCamera.updateProjectionMatrix();
+    };
+
+    const framePerspective = (immediate: boolean, delta: number) => {
+      viewGroup.updateMatrixWorld(true);
+      bounds.setFromObject(viewGroup);
+      bounds.getSize(boundsSize);
+      bounds.getCenter(boundsCenter);
+      const radius = Math.max(boundsSize.length() / 2, 0.5);
+      const verticalHalfFov = THREE.MathUtils.degToRad(
+        perspectiveCamera.fov / 2,
+      );
+      const horizontalHalfFov = Math.atan(
+        Math.tan(verticalHalfFov) * viewportAspect,
+      );
+      const limitingHalfFov = Math.max(
+        0.12,
+        Math.min(verticalHalfFov, horizontalHalfFov),
+      );
+      const targetDistance =
+        (radius / Math.sin(limitingHalfFov)) * 1.14;
+      const cameraEase = immediate ? 1 : 1 - Math.pow(0.0015, delta);
+      cameraFocus.lerp(boundsCenter, cameraEase);
+      cameraDistance = THREE.MathUtils.lerp(
+        cameraDistance,
+        targetDistance,
+        cameraEase,
+      );
+      perspectiveCamera.position
+        .copy(cameraFocus)
+        .addScaledVector(cameraDirection, cameraDistance);
+      perspectiveCamera.lookAt(cameraFocus);
+    };
 
     const getTargetProgress = () => {
       if (targetModeRef.current === "dieline") return 0;
       if (targetModeRef.current === "folding") {
         return clamp01(foldProgressRef.current ?? 0);
       }
-      if (targetModeRef.current === "open") {
-        return boxType === "mailer" ? 1 : foldModel.openProgress;
-      }
       return 1;
     };
 
+    let animationFrame = 0;
+    let currentProgress = initialProgress(
+      targetModeRef.current,
+      foldProgressRef.current,
+    );
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const timer = new THREE.Timer();
+    timer.connect(document);
+
     const animate = () => {
-      const delta = Math.min(clock.getDelta(), 0.04);
+      timer.update();
+      const delta = Math.min(timer.getDelta(), 0.04);
+      const currentMode = targetModeRef.current;
       const targetProgress = getTargetProgress();
-      if (reducedMotion || targetModeRef.current === "folding") {
-        currentProgress = targetProgress;
-      } else {
+      const directManipulation =
+        reducedMotion || currentMode === "folding" || currentMode === "dieline";
+      if (directManipulation) currentProgress = targetProgress;
+      else {
         currentProgress = THREE.MathUtils.lerp(
           currentProgress,
           targetProgress,
@@ -1021,66 +734,66 @@ export default function BoxPreview({
         }
       }
 
-      const currentMode = targetModeRef.current;
-      const isDirectManipulation = currentMode === "folding";
-      foldModel.joints.forEach((joint) => {
-        const angle =
-          boxType === "mailer" && currentMode === "open"
-            ? (joint.openAngle ?? joint.angle) *
-              phaseProgress(currentProgress, joint.phase)
-            : joint.angle * phaseProgress(currentProgress, joint.phase);
-        const currentAngle =
-          joint.axis === "x" ? joint.group.rotation.x : joint.group.rotation.y;
-        const nextAngle =
-          reducedMotion || isDirectManipulation
-            ? angle
-            : THREE.MathUtils.lerp(
-                currentAngle,
-                angle,
-                1 - Math.pow(0.0002, delta),
-              );
-        if (joint.axis === "x") {
-          joint.group.rotation.x = nextAngle;
-        } else {
-          joint.group.rotation.y = nextAngle;
-        }
-      });
-      foldModel.update(currentProgress);
+      foldModel.applyPose(
+        currentProgress,
+        currentMode,
+        directManipulation,
+        delta,
+      );
+      const isFlat = currentMode === "dieline";
+      const rootTilt = isFlat
+        ? 0
+        : (-Math.PI / 2) * phaseProgress(currentProgress, [0.025, 0.16]);
+      modelRoot.rotation.x = directManipulation
+        ? rootTilt
+        : THREE.MathUtils.lerp(
+            modelRoot.rotation.x,
+            rootTilt,
+            1 - Math.pow(0.0003, delta),
+          );
 
-      const assembled = phaseProgress(currentProgress, [0.14, 0.68]);
-      const cameraZoom = THREE.MathUtils.lerp(
-        foldModel.flatZoom,
-        1,
-        assembled,
-      );
-      if (Math.abs(camera.zoom - cameraZoom) > 0.0001) {
-        camera.zoom = cameraZoom;
-        camera.updateProjectionMatrix();
+      if (isFlat) {
+        viewGroup.rotation.set(0, 0, 0);
+        renderer.domElement.style.cursor = "default";
+      } else {
+        renderer.domElement.style.cursor = dragging ? "grabbing" : "grab";
+        if (autoRotateRef.current && !dragging) userYaw += delta * 0.18;
+        const viewEase = directManipulation ? 1 : 1 - Math.pow(0.002, delta);
+        viewGroup.rotation.x = THREE.MathUtils.lerp(
+          viewGroup.rotation.x,
+          userPitch,
+          viewEase,
+        );
+        viewGroup.rotation.y = THREE.MathUtils.lerp(
+          viewGroup.rotation.y,
+          userYaw,
+          viewEase,
+        );
       }
-      const creaseOpacity = THREE.MathUtils.lerp(
-        0.78,
-        0.05,
-        phaseProgress(currentProgress, [0.05, 0.5]),
-      );
+
+      const creaseOpacity = isFlat
+        ? 0.84
+        : THREE.MathUtils.lerp(
+            0.68,
+            0.06,
+            phaseProgress(currentProgress, [0.08, 0.62]),
+          );
       foldModel.creaseLines.forEach((line) => {
         (line.material as THREE.LineDashedMaterial).opacity = creaseOpacity;
       });
+      cutMaterial.opacity = isFlat ? 0.94 : 0.62;
+      floor.visible = !isFlat && currentProgress > 0.04;
 
-      viewGroup.rotation.x = THREE.MathUtils.lerp(
-        viewGroup.rotation.x,
-        userPitch,
-        1 - Math.pow(0.002, delta),
-      );
-      if (autoRotateRef.current && !dragging) {
-        viewGroup.rotation.y += delta * (currentProgress < 0.08 ? 0.1 : 0.2);
-      }
-      renderer.render(scene, camera);
+      if (isFlat) frameFlat();
+      else framePerspective(directManipulation, delta);
+      renderer.render(scene, isFlat ? flatCamera : perspectiveCamera);
       animationFrame = requestAnimationFrame(animate);
     };
     animate();
 
     return () => {
       cancelAnimationFrame(animationFrame);
+      timer.dispose();
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("pointerdown", handlePointerDown);
       renderer.domElement.removeEventListener("pointermove", handlePointerMove);
@@ -1090,7 +803,7 @@ export default function BoxPreview({
         handlePointerUp,
       );
       geometries.forEach((geometry) => geometry.dispose());
-      materialsSet.forEach((item) => item.dispose());
+      materials.forEach((item) => item.dispose());
       renderer.dispose();
       renderer.domElement.remove();
     };
@@ -1105,7 +818,7 @@ export default function BoxPreview({
       role="img"
       aria-label={`${width} × ${depth} × ${height} 밀리미터 ${
         boxType === "mailer"
-          ? "G형 택배박스"
+          ? "G형 롤엔드 택배박스"
           : boxType === "shipping"
             ? "A형 골판지박스"
             : "서랍형 패키지"
