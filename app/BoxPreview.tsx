@@ -8,6 +8,11 @@ import {
   panelShapePoints,
 } from "./box-model/layout.ts";
 import { createBoxBlueprint } from "./box-model/templates.ts";
+import {
+  DEFAULT_ORBIT_ANGLES,
+  floorVisibilityForPitch,
+  orbitAnglesAfterDrag,
+} from "./box-model/view-controls.ts";
 import type {
   BlueprintBoxType,
   BoxBlueprint,
@@ -30,6 +35,8 @@ type BoxPreviewProps = {
   print: "none" | "one" | "full";
   autoRotate: boolean;
   foldProgress?: number;
+  viewResetKey: number;
+  onManualRotate?: () => void;
 };
 
 type Joint = {
@@ -451,11 +458,15 @@ export default function BoxPreview({
   print,
   autoRotate,
   foldProgress,
+  viewResetKey,
+  onManualRotate,
 }: BoxPreviewProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const targetModeRef = useRef<FoldMode>(mode);
   const autoRotateRef = useRef(autoRotate);
   const foldProgressRef = useRef(foldProgress);
+  const viewResetKeyRef = useRef(viewResetKey);
+  const onManualRotateRef = useRef(onManualRotate);
 
   useEffect(() => {
     targetModeRef.current = mode;
@@ -468,6 +479,14 @@ export default function BoxPreview({
   useEffect(() => {
     foldProgressRef.current = foldProgress;
   }, [foldProgress]);
+
+  useEffect(() => {
+    viewResetKeyRef.current = viewResetKey;
+  }, [viewResetKey]);
+
+  useEffect(() => {
+    onManualRotateRef.current = onManualRotate;
+  }, [onManualRotate]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -500,9 +519,13 @@ export default function BoxPreview({
     rimLight.position.set(-5, 3, -4);
     scene.add(rimLight);
 
+    const floorMaterial = new THREE.ShadowMaterial({
+      color: 0x26342d,
+      opacity: 0.14,
+    });
     const floor = new THREE.Mesh(
       new THREE.CircleGeometry(5.4, 64),
-      new THREE.ShadowMaterial({ color: 0x26342d, opacity: 0.14 }),
+      floorMaterial,
     );
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -0.025;
@@ -585,25 +608,30 @@ export default function BoxPreview({
     let dragging = false;
     let previousX = 0;
     let previousY = 0;
-    let userYaw = -0.46;
-    let userPitch = -0.07;
+    let userYaw = DEFAULT_ORBIT_ANGLES.yaw;
+    let userPitch = DEFAULT_ORBIT_ANGLES.pitch;
+    let appliedViewResetKey = viewResetKeyRef.current;
 
     const handlePointerDown = (event: PointerEvent) => {
       if (targetModeRef.current === "dieline") return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.preventDefault();
       dragging = true;
       previousX = event.clientX;
       previousY = event.clientY;
+      onManualRotateRef.current?.();
       renderer.domElement.setPointerCapture(event.pointerId);
       renderer.domElement.style.cursor = "grabbing";
     };
     const handlePointerMove = (event: PointerEvent) => {
       if (!dragging) return;
-      userYaw += (event.clientX - previousX) * 0.008;
-      userPitch = THREE.MathUtils.clamp(
-        userPitch + (event.clientY - previousY) * 0.004,
-        -0.42,
-        0.24,
+      const nextAngles = orbitAnglesAfterDrag(
+        { yaw: userYaw, pitch: userPitch },
+        event.clientX - previousX,
+        event.clientY - previousY,
       );
+      userYaw = nextAngles.yaw;
+      userPitch = nextAngles.pitch;
       previousX = event.clientX;
       previousY = event.clientY;
     };
@@ -719,6 +747,11 @@ export default function BoxPreview({
       timer.update();
       const delta = Math.min(timer.getDelta(), 0.04);
       const currentMode = targetModeRef.current;
+      if (appliedViewResetKey !== viewResetKeyRef.current) {
+        appliedViewResetKey = viewResetKeyRef.current;
+        userYaw = DEFAULT_ORBIT_ANGLES.yaw;
+        userPitch = DEFAULT_ORBIT_ANGLES.pitch;
+      }
       const targetProgress = getTargetProgress();
       const directManipulation =
         reducedMotion || currentMode === "folding" || currentMode === "dieline";
@@ -782,7 +815,10 @@ export default function BoxPreview({
         (line.material as THREE.LineDashedMaterial).opacity = creaseOpacity;
       });
       cutMaterial.opacity = isFlat ? 0.94 : 0.62;
-      floor.visible = !isFlat && currentProgress > 0.04;
+      const floorVisibility = floorVisibilityForPitch(userPitch);
+      floorMaterial.opacity = 0.14 * floorVisibility;
+      floor.visible =
+        !isFlat && currentProgress > 0.04 && floorVisibility > 0.01;
 
       if (isFlat) frameFlat();
       else framePerspective(directManipulation, delta);

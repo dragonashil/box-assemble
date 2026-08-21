@@ -75,6 +75,7 @@ export default function BoxStudio() {
   const [coating, setCoating] = useState(false);
   const [express, setExpress] = useState(false);
   const [autoRotate, setAutoRotate] = useState(true);
+  const [viewResetKey, setViewResetKey] = useState(0);
   const [assets, setAssets] = useState<Asset[]>([
     { name: "brand_graphic_v4.ai", type: "AI", size: "2.8 MB" },
     { name: "mailer_G240.pdf", type: "PDF", size: "428 KB" },
@@ -339,8 +340,8 @@ export default function BoxStudio() {
               <button
                 className="round-button"
                 onClick={() => {
-                  handleViewModeChange("open");
-                  setAutoRotate(true);
+                  if (viewMode === "dieline") handleViewModeChange("open");
+                  setViewResetKey((value) => value + 1);
                 }}
                 aria-label="3D 보기 초기화"
                 title="3D 보기 초기화"
@@ -370,6 +371,8 @@ export default function BoxStudio() {
               print={printType}
               autoRotate={autoRotate}
               foldProgress={foldProgress}
+              viewResetKey={viewResetKey}
+              onManualRotate={() => setAutoRotate(false)}
             />
             <div className="fold-progress-control">
               <div className="fold-progress-heading">
