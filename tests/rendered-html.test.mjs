@@ -61,45 +61,56 @@ test("ships product metadata, SUIT, and no starter preview", async () => {
   );
 });
 
-test("connects box selection to planar hinge models", async () => {
-  const [studio, preview] = await Promise.all([
+test("connects box selection to one shared dieline blueprint", async () => {
+  const [studio, preview, templates] = await Promise.all([
     readFile(new URL("../app/BoxStudio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/BoxPreview.tsx", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/box-model/templates.ts", import.meta.url),
+      "utf8",
+    ),
   ]);
 
   assert.match(studio, /boxType=\{boxType\}/);
   assert.doesNotMatch(studio, /viewMode === "dieline" \?/);
-  assert.match(preview, /PlaneGeometry/);
+  assert.match(preview, /ShapeGeometry/);
+  assert.match(preview, /OrthographicCamera/);
   assert.match(preview, /DoubleSide/);
-  assert.match(preview, /buildMailer/);
-  assert.match(preview, /buildShipping/);
-  assert.match(preview, /buildDrawer/);
+  assert.match(preview, /createBoxBlueprint/);
+  assert.match(templates, /mailerBlueprint/);
+  assert.match(templates, /shippingBlueprint/);
+  assert.match(templates, /drawerBlueprint/);
+  assert.doesNotMatch(preview, /EdgesGeometry/);
   assert.doesNotMatch(preview, /new THREE\.BoxGeometry/);
 });
 
-test("keeps the G-type open pose constrained and exposes direct fold control", async () => {
-  const [studio, preview, css] = await Promise.all([
+test("keeps named open poses constrained and exposes direct fold control", async () => {
+  const [studio, preview, templates, layout, css] = await Promise.all([
     readFile(new URL("../app/BoxStudio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/BoxPreview.tsx", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/box-model/templates.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../app/box-model/layout.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
   assert.match(studio, /type="range"/);
-  assert.match(studio, /FEFCO 0427/);
+  assert.match(studio, /0427 계열/);
   assert.match(studio, /nextProgress === 1 \? "closed" : "folding"/);
-  assert.match(studio, /몸체 100% · 뚜껑 열림/);
-  assert.match(preview, /role: "lidHinge"/);
-  assert.match(preview, /role: "leftInnerWall"/);
-  assert.match(preview, /role: "rightInnerWall"/);
-  assert.match(preview, /role: "frontReceiver"/);
-  assert.match(preview, /"frontLeftCorner"/);
-  assert.match(preview, /role: "leftCherryEar"/);
-  assert.match(preview, /role: "rightCherryEar"/);
-  assert.match(preview, /openAngle: 0/);
+  assert.match(studio, /몸체 완성 · 뚜껑 열림/);
+  assert.match(templates, /id: "lid-hinge"/);
+  assert.match(templates, /inner-return-hook/);
+  assert.match(templates, /front-left-lock-wing/);
+  assert.match(templates, /tuck-left-ear/);
+  assert.match(templates, /tuck-right-ear/);
+  assert.match(templates, /openAngle: 0/);
   assert.match(preview, /joint\.openAngle \?\? joint\.angle/);
   assert.match(preview, /currentMode === "folding"/);
-  assert.doesNotMatch(preview, /openProgress: 0\.52/);
-  assert.doesNotMatch(preview, /foldModel\.group\.scale/);
-  assert.match(preview, /camera\.zoom = cameraZoom/);
+  assert.doesNotMatch(preview, /openProgress/);
+  assert.doesNotMatch(preview, /flatZoom/);
+  assert.match(preview, /frameFlat/);
+  assert.match(layout, /createFlatLayout/);
   assert.match(css, /\.fold-progress-control/);
 });
