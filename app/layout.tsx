@@ -17,7 +17,9 @@ export async function generateMetadata(): Promise<Metadata> {
     .get("x-forwarded-proto")
     ?.split(",")[0]
     ?.trim();
-  const protocol = forwardedProtocol === "http" ? "http" : "https";
+  const isLocalHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host);
+  const protocol =
+    forwardedProtocol === "http" || isLocalHost ? "http" : "https";
   let metadataBase = new URL(
     "https://formbox-studio-demo.drdnrun.chatgpt.site",
   );
