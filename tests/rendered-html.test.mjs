@@ -4,14 +4,14 @@ import test from "node:test";
 
 const templateRoot = new URL("../", import.meta.url);
 
-async function render() {
+async function render(path = "/", cookie = "") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+    new Request(`http://localhost${path}`, {
+      headers: { accept: "text/html", cookie },
     }),
     {
       ASSETS: {
@@ -39,7 +39,38 @@ test("server-renders the FORMBOX workspace", async () => {
   assert.match(html, /박스 형태/);
   assert.match(html, /사양 설정/);
   assert.match(html, /예상 견적/);
+  assert.match(html, /<html[^>]*lang="ko"/);
+  assert.match(html, /aria-label="언어 선택"/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
+});
+
+test("server-renders English demo links before hydration, overriding a saved Korean choice", async () => {
+  const response = await render("/?lang=en", "formbox-locale=ko");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /<html[^>]*lang="en"/);
+  assert.match(html, /<title>FORMBOX — 3D Box Configurator &amp; Instant Estimates \| FORMBOX<\/title>/);
+  assert.match(html, /property="og:locale" content="en_US"/);
+  assert.match(html, /Box style/);
+  assert.match(html, /Internal dimensions/);
+  assert.match(html, /Roll-end mailer/);
+  assert.match(html, /Estimated cost/);
+  assert.match(html, /VAT incl\.[\s\S]*KRW/);
+  assert.match(html, /aria-label="Choose language"/);
+  assert.match(html, /aria-label="Switch to English" aria-pressed="true"/);
+  assert.doesNotMatch(html, /모든 변경사항 저장됨|제작 가능한 사양이에요/);
+});
+
+test("uses the persisted language and lets an explicit Korean link override it", async () => {
+  const english = await (await render("/", "formbox-locale=en")).text();
+  assert.match(english, /<html[^>]*lang="en"/);
+  assert.match(english, /Box style/);
+  const korean = await (await render("/?lang=ko", "formbox-locale=en")).text();
+  assert.match(korean, /<html[^>]*lang="ko"/);
+  assert.match(korean, /박스 형태/);
+  const fallback = await (await render("/?lang=fr", "formbox-locale=invalid")).text();
+  assert.match(fallback, /<html[^>]*lang="ko"/);
+  assert.match(fallback, /박스 형태/);
 });
 
 test("ships product metadata, SUIT, and no starter preview", async () => {
@@ -50,8 +81,8 @@ test("ships product metadata, SUIT, and no starter preview", async () => {
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /<BoxStudio \/>/);
-  assert.match(layout, /lang="ko"/);
+  assert.match(page, /<BoxStudio initialLocale=\{await getPageLocale\(props\)\} \/>/);
+  assert.match(layout, /lang=\{locale\}/);
   assert.match(css, /SUIT Variable/);
   assert.match(packageJson, /"three"/);
   assert.match(packageJson, /"reicon-react"/);
@@ -85,7 +116,7 @@ test("connects box selection to one shared dieline blueprint", async () => {
 });
 
 test("keeps named open poses constrained and exposes direct fold control", async () => {
-  const [studio, preview, templates, layout, css] = await Promise.all([
+  const [studio, preview, templates, layout, css, dictionary] = await Promise.all([
     readFile(new URL("../app/BoxStudio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/BoxPreview.tsx", import.meta.url), "utf8"),
     readFile(
@@ -97,12 +128,15 @@ test("keeps named open poses constrained and exposes direct fold control", async
       "utf8",
     ),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/i18n.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(studio, /type="range"/);
-  assert.match(studio, /0427 계열/);
+  assert.match(dictionary, /0427 계열/);
   assert.match(studio, /nextProgress === 1 \? "closed" : "folding"/);
-  assert.match(studio, /몸체 완성 · 뚜껑 열림/);
+  assert.match(studio, /t\.openStatus\[boxType\]/);
+  assert.match(dictionary, /몸체 완성 · 뚜껑 열림/);
+  assert.match(dictionary, /Body assembled · Lid open/);
   assert.match(templates, /id: "lid-hinge"/);
   assert.match(templates, /inner-return-hook/);
   assert.match(templates, /front-left-lock-wing/);

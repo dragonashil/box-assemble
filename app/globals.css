@@ -65,7 +65,7 @@ select:focus-visible {
   position: relative;
   z-index: 20;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(160px, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
   min-width: 0;
   padding: 0 20px;
@@ -78,6 +78,59 @@ select:focus-visible {
 .header-actions {
   display: flex;
   align-items: center;
+}
+
+.language-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+}
+
+.language-switch button {
+  min-width: 40px;
+  min-height: 38px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: #55554f;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.language-switch button[aria-pressed="true"] {
+  background: var(--ink);
+  color: white;
+}
+
+.language-switch button:hover:not([aria-pressed="true"]) {
+  background: var(--mint);
+  color: var(--mint-deep);
+}
+
+.header-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+html[lang="en"] .material-option strong {
+  white-space: normal;
+  line-height: 1.25;
+}
+
+html[lang="en"] .material-option small {
+  line-height: 1.35;
+}
+
+html[lang="en"] .check-option small {
+  line-height: 1.45;
+}
+
+.check-option input:focus-visible + .custom-check {
+  outline: 3px solid var(--mint-deep);
+  outline-offset: 3px;
 }
 
 .brand {

@@ -1,12 +1,27 @@
 import type { Metadata } from "next";
 import BoxStudio from "./BoxStudio";
+import { dictionaries, resolveLocale } from "./i18n";
+import { getRequestLocale } from "./locale-server";
 
-export const metadata: Metadata = {
-  title: "FORMBOX — 3D 박스 실시간 견적",
-  description:
-    "박스 형태와 사양을 고르면 3D 결과와 제작 견적을 즉시 확인할 수 있습니다.",
+type PageProps = {
+  searchParams: Promise<{ lang?: string | string[] }>;
 };
 
-export default function Home() {
-  return <BoxStudio />;
+async function getPageLocale({ searchParams }: PageProps) {
+  const [params, requestLocale] = await Promise.all([searchParams, getRequestLocale()]);
+  const queryLocale = Array.isArray(params.lang) ? params.lang[0] : params.lang;
+  return resolveLocale(queryLocale, requestLocale);
+}
+
+export async function generateMetadata(props: PageProps): Promise<Metadata> {
+  const locale = await getPageLocale(props);
+  const t = dictionaries[locale];
+  return {
+    title: t.meta.title,
+    description: t.meta.description,
+  };
+}
+
+export default async function Home(props: PageProps) {
+  return <BoxStudio initialLocale={await getPageLocale(props)} />;
 }

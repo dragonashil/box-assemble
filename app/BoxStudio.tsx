@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useContext, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import ArrowRotate from "reicon-react/icons/ArrowRotate";
 import Box from "reicon-react/icons/Box";
@@ -21,9 +21,17 @@ import Play from "reicon-react/icons/Play";
 import Ruler from "reicon-react/icons/Ruler";
 import Upload from "reicon-react/icons/Upload";
 
+import { LocaleContext } from "./locale-context";
+import { buildQuoteText, dictionaries, formatFoldProgress, formatMoney, formatNumber, formatQuantity, formatQuantityBasis, LOCALE_COOKIE, type Locale } from "./i18n";
+
+function PreviewLoading() {
+  const locale = useContext(LocaleContext);
+  return <div className="preview-loading" role="status">{dictionaries[locale].copy.loading}</div>;
+}
+
 const BoxPreview = dynamic(() => import("./BoxPreview"), {
   ssr: false,
-  loading: () => <div className="preview-loading">3D 모델을 준비하고 있어요</div>,
+  loading: () => <PreviewLoading />,
 });
 
 type BoxType = "mailer" | "shipping" | "drawer";
@@ -38,31 +46,26 @@ type Asset = {
   size: string;
 };
 
-const boxTypes: Array<{
-  id: BoxType;
-  name: string;
-  detail: string;
-  icon: typeof Box;
-}> = [
-  { id: "mailer", name: "G형 택배박스", detail: "0427 계열 · 롤엔드", icon: Box3 },
-  { id: "shipping", name: "A형 골판지박스", detail: "0201 계열 · 접착식", icon: Box },
-  { id: "drawer", name: "서랍형 패키지", detail: "트레이 + 슬리브 · 2매", icon: Box2 },
-];
+const boxTypeOptions = [
+  { id: "mailer", icon: Box3 },
+  { id: "shipping", icon: Box },
+  { id: "drawer", icon: Box2 },
+] as const;
 
-const materials: Array<{
-  id: Paper;
-  label: string;
-  sub: string;
-  swatch: string;
-}> = [
-  { id: "kraft", label: "KLB 크라프트", sub: "E골 · 1.5 mm", swatch: "#C99B62" },
-  { id: "white", label: "화이트보드", sub: "E골 · 1.5 mm", swatch: "#F2EFE8" },
-  { id: "green", label: "그린보드", sub: "F골 · 1.2 mm", swatch: "#C8E6CD" },
-];
+const materialOptions = [
+  { id: "kraft", swatch: "#C99B62" },
+  { id: "white", swatch: "#F2EFE8" },
+  { id: "green", swatch: "#C8E6CD" },
+] as const;
 
-const numberFormatter = new Intl.NumberFormat("ko-KR");
-
-export default function BoxStudio() {
+export default function BoxStudio({ initialLocale = "ko" }: { initialLocale?: Locale }) {
+  const [locale, setLocale] = useState<Locale>(initialLocale);
+  const t = dictionaries[locale];
+  const boxTypes = boxTypeOptions.map((item) => ({ ...item, ...t.boxes[item.id] }));
+  const materials = materialOptions.map((item) => ({ ...item, ...t.materials[item.id] }));
+  const numberFormatter = { format: (value: number) => formatNumber(value, locale) };
+  const money = (value: number) => formatMoney(value, locale);
+  const quantityLabel = (value: number) => formatQuantity(value, locale);
   const [boxType, setBoxType] = useState<BoxType>("mailer");
   const [viewMode, setViewMode] = useState<ViewMode>("open");
   const [foldProgress, setFoldProgress] = useState(1);
@@ -83,6 +86,54 @@ export default function BoxStudio() {
   const [quoteOpen, setQuoteOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const modalRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    document.title = t.meta.title;
+    document.querySelector('meta[name="description"]')?.setAttribute("content", t.meta.description);
+    for (const property of ["og:title", "twitter:title"]) {
+      document.querySelector(`meta[property="${property}"], meta[name="${property}"]`)?.setAttribute("content", t.meta.title);
+    }
+    for (const property of ["og:description", "twitter:description"]) {
+      document.querySelector(`meta[property="${property}"], meta[name="${property}"]`)?.setAttribute("content", t.meta.description);
+    }
+    document.querySelector('meta[property="og:locale"]')?.setAttribute("content", locale === "en" ? "en_US" : "ko_KR");
+    document.cookie = `${LOCALE_COOKIE}=${locale}; Path=/; Max-Age=31536000; SameSite=Lax${window.location.protocol === "https:" ? "; Secure" : ""}`;
+  }, [locale, t.meta.title, t.meta.description]);
+
+  useEffect(() => {
+    if (!quoteOpen) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const modal = modalRef.current;
+    modal?.querySelector<HTMLButtonElement>("button")?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setQuoteOpen(false);
+      if (event.key !== "Tab" || !modal) return;
+      const controls = Array.from(modal.querySelectorAll<HTMLElement>("button, [href], input, select, [tabindex='0']"));
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [quoteOpen]);
+
+  const changeLocale = (nextLocale: Locale) => {
+    setLocale(nextLocale);
+    const url = new URL(window.location.href);
+    url.searchParams.set("lang", nextLocale);
+    window.history.replaceState(window.history.state, "", url);
+  };
 
   const quote = useMemo(() => {
     const volumeFactor = (width * depth * height) / 1_000_000;
@@ -167,29 +218,22 @@ export default function BoxStudio() {
   };
 
   const downloadQuote = () => {
-    const quoteText = [
-      "FORMBOX 예상 견적서",
-      `박스: ${boxTypes.find((item) => item.id === boxType)?.name}`,
-      `규격: ${width} × ${depth} × ${height} mm`,
-      `재질: ${materials.find((item) => item.id === paper)?.label}`,
-      `수량: ${numberFormatter.format(quantity)}개`,
-      `개당 예상 단가: ${numberFormatter.format(quote.unit)}원`,
-      `예상 총액(VAT 포함): ${numberFormatter.format(quote.total)}원`,
-      "",
-      "실제 제작 가능 여부와 최종 금액은 도면 검토 후 확정됩니다.",
-    ].join("\n");
+    const quoteText = buildQuoteText(locale, {
+      boxType, paper, width, depth, height, quantity, unit: quote.unit, total: quote.total,
+    });
     const url = URL.createObjectURL(
       new Blob([quoteText], { type: "text/plain;charset=utf-8" }),
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = "formbox-quote.txt";
+    link.download = `formbox-quote-${locale}.txt`;
     link.click();
     URL.revokeObjectURL(url);
     setQuoteOpen(false);
   };
 
   return (
+    <LocaleContext.Provider value={locale}>
     <main className="studio-shell">
       <header className="studio-header">
         <div className="brand">
@@ -203,20 +247,25 @@ export default function BoxStudio() {
         </div>
         <div className="project-title">
           <strong>
-            오브젝트 패키지 · {boxTypes.find((item) => item.id === boxType)?.name}
+            {t.copy.project} · {boxTypes.find((item) => item.id === boxType)?.name}
           </strong>
-          <span><Check size={14} aria-hidden="true" /> 모든 변경사항 저장됨</span>
+          <span><Check size={14} aria-hidden="true" /> {t.copy.session}</span>
         </div>
-        <nav className="header-actions" aria-label="프로젝트 메뉴">
-          <button className="plain-button">도면 라이브러리</button>
-          <button className="pill-button light">
+        <nav className="header-actions" aria-label={t.copy.projectMenu}>
+          <div className="language-switch" role="group" aria-label={t.copy.language}>
+            <button type="button" lang="ko" aria-label={t.copy.switchKorean} aria-pressed={locale === "ko"} onClick={() => changeLocale("ko")}>KO</button>
+            <button type="button" lang="en" aria-label={t.copy.switchEnglish} aria-pressed={locale === "en"} onClick={() => changeLocale("en")}>EN</button>
+          </div>
+          <button className="plain-button" disabled title={t.copy.demoControl}>{t.copy.library}</button>
+          <button className="pill-button light" disabled title={t.copy.demoControl}>
             <FileText size={18} aria-hidden="true" />
-            견적 목록
+            {t.copy.quotes}
           </button>
           <button
             className="avatar-button"
-            aria-label="사용자 메뉴"
-            title="사용자 메뉴"
+            aria-label={t.copy.userMenu}
+            title={t.copy.demoControl}
+            disabled
           >
             BF
           </button>
@@ -224,11 +273,11 @@ export default function BoxStudio() {
       </header>
 
       <div className="workflow-bar">
-        <div className="workflow-step done"><span>1</span> 박스 선택</div>
+        <div className="workflow-step done"><span>1</span> {t.copy.chooseBox}</div>
         <div className="workflow-line active" />
-        <div className="workflow-step active"><span>2</span> 사양 설정</div>
+        <div className="workflow-step active"><span>2</span> {t.copy.configure}</div>
         <div className="workflow-line" />
-        <div className="workflow-step"><span>3</span> 견적 확인</div>
+        <div className="workflow-step"><span>3</span> {t.copy.reviewQuote}</div>
       </div>
 
       <section className="workspace">
@@ -236,9 +285,9 @@ export default function BoxStudio() {
           <div className="panel-heading">
             <div>
               <span className="eyebrow">BOX TYPE</span>
-              <h1>박스 형태</h1>
+              <h1>{t.copy.boxShape}</h1>
             </div>
-            <button className="round-button" aria-label="박스 형태 안내" title="박스 형태 안내">
+            <button className="round-button" aria-label={t.copy.boxShapeHelp} title={t.copy.boxShapeDetail}>
               <InfoCircle size={18} aria-hidden="true" />
             </button>
           </div>
@@ -251,6 +300,7 @@ export default function BoxStudio() {
                 <button
                   key={item.id}
                   className={`type-card ${selected ? "selected" : ""}`}
+                  aria-pressed={selected}
                   onClick={() => handleBoxTypeChange(item.id)}
                 >
                   <span className="type-icon">
@@ -274,10 +324,10 @@ export default function BoxStudio() {
 
           <div className="asset-section">
             <div className="asset-title">
-              <span>도면 파일</span>
+              <span>{t.copy.drawings}</span>
               <span className="asset-count">{assets.length}</span>
             </div>
-            <p>AI 또는 PDF 원본을 연결해 인쇄 위치를 관리합니다.</p>
+            <p>{t.copy.drawingsNote}</p>
             <div className="asset-list">
               {assets.map((asset, index) => (
                 <div className="asset-row" key={`${asset.name}-${index}`}>
@@ -297,6 +347,7 @@ export default function BoxStudio() {
               className="visually-hidden"
               type="file"
               accept=".ai,.pdf,application/pdf"
+              aria-label={t.copy.drawingInput}
               onChange={handleFile}
             />
             <button
@@ -304,18 +355,18 @@ export default function BoxStudio() {
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload size={17} aria-hidden="true" />
-              도면 추가
+              {t.copy.addDrawing}
             </button>
           </div>
         </aside>
 
         <section className="preview-panel" ref={stageRef}>
           <div className="preview-topbar">
-            <div className="view-tabs" role="tablist" aria-label="박스 보기 모드">
+            <div className="view-tabs" role="tablist" aria-label={t.copy.viewModes}>
               {([
-                ["closed", "완성"],
-                ["open", "열림"],
-                ["dieline", "전개도"],
+                ["closed", t.views.closed],
+                ["open", t.views.open],
+                ["dieline", t.views.dieline],
               ] as Array<[ViewTabMode, string]>).map(([id, label]) => (
                 <button
                   key={id}
@@ -332,8 +383,8 @@ export default function BoxStudio() {
               <button
                 className={`round-button ${autoRotate ? "active" : ""}`}
                 onClick={() => setAutoRotate((value) => !value)}
-                aria-label={autoRotate ? "자동 회전 멈추기" : "자동 회전 시작"}
-                title={autoRotate ? "자동 회전 멈추기" : "자동 회전 시작"}
+                aria-label={autoRotate ? t.copy.stopRotate : t.copy.startRotate}
+                title={autoRotate ? t.copy.stopRotate : t.copy.startRotate}
               >
                 {autoRotate ? <Pause size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
               </button>
@@ -343,16 +394,16 @@ export default function BoxStudio() {
                   if (viewMode === "dieline") handleViewModeChange("open");
                   setViewResetKey((value) => value + 1);
                 }}
-                aria-label="3D 보기 초기화"
-                title="3D 보기 초기화"
+                aria-label={t.copy.resetView}
+                title={t.copy.resetView}
               >
                 <ArrowRotate size={18} aria-hidden="true" />
               </button>
               <button
                 className="round-button"
                 onClick={openFullscreen}
-                aria-label="전체 화면"
-                title="전체 화면"
+                aria-label={t.copy.fullscreen}
+                title={t.copy.fullscreen}
               >
                 <Fullscreen size={18} aria-hidden="true" />
               </button>
@@ -363,6 +414,7 @@ export default function BoxStudio() {
             <div className="grid-floor" aria-hidden="true" />
             <BoxPreview
               boxType={boxType}
+              locale={locale}
               width={width}
               depth={depth}
               height={height}
@@ -378,15 +430,11 @@ export default function BoxStudio() {
               <div className="fold-progress-heading">
                 <label htmlFor="box-fold-progress">
                   <Layer size={15} aria-hidden="true" />
-                  접힘 진행
+                  {t.copy.foldProgress}
                 </label>
                 <output htmlFor="box-fold-progress">
                   {viewMode === "open"
-                    ? boxType === "mailer"
-                      ? "몸체 완성 · 뚜껑 열림"
-                      : boxType === "shipping"
-                        ? "몸체 완성 · 상부 열림"
-                        : "트레이 완성 · 서랍 열림"
+                    ? t.openStatus[boxType]
                     : `${Math.round(foldProgress * 100)}%`}
                 </output>
               </div>
@@ -398,15 +446,9 @@ export default function BoxStudio() {
                 step="1"
                 value={Math.round(foldProgress * 100)}
                 onChange={handleFoldProgressChange}
-                aria-valuetext={
-                  viewMode === "open"
-                    ? boxType === "mailer"
-                      ? "몸체 완성, 뚜껑만 열림"
-                      : boxType === "shipping"
-                        ? "몸체와 바닥 완성, 상부 플랩 열림"
-                        : "트레이와 슬리브 완성, 서랍 열림"
-                    : `${Math.round(foldProgress * 100)}% 접힘`
-                }
+                aria-valuetext={viewMode === "open"
+                  ? t.openStatusAria[boxType]
+                  : formatFoldProgress(Math.round(foldProgress * 100), locale)}
                 aria-describedby="box-fold-endpoints"
                 style={{
                   background: `linear-gradient(to right, var(--mint-deep) 0 ${foldProgress * 100}%, rgba(37, 95, 74, 0.18) ${foldProgress * 100}% 100%)`,
@@ -416,8 +458,8 @@ export default function BoxStudio() {
                 className="fold-progress-endpoints"
                 id="box-fold-endpoints"
               >
-                <span>전개도</span>
-                <span>완성</span>
+                <span>{t.views.dieline}</span>
+                <span>{t.views.closed}</span>
               </div>
             </div>
             <div className="dimension dimension-width">
@@ -438,13 +480,13 @@ export default function BoxStudio() {
                 <i style={{ background: materials.find((item) => item.id === paper)?.swatch }} />
                 {materials.find((item) => item.id === paper)?.label}
               </span>
-              <span className="scale-chip">치수 비례 유지</span>
+              <span className="scale-chip">{t.copy.scaled}</span>
             </div>
             <p>
               <Layer size={16} aria-hidden="true" />
               {boxType === "mailer"
-                ? "오픈소스 기반 롤엔드 전개도와 3D가 동일한 힌지로 연결됩니다"
-                : "전개도와 완성 상태가 동일한 접힘선으로 연결됩니다"}
+                ? t.copy.mailerHinges
+                : t.copy.sharedHinges}
             </p>
           </div>
         </section>
@@ -454,22 +496,22 @@ export default function BoxStudio() {
             <div className="config-header">
               <div>
                 <span className="eyebrow">CONFIGURATION</span>
-                <h2>사양 설정</h2>
+                <h2>{t.copy.configure}</h2>
               </div>
-              <span className="live-badge"><i /> 실시간 반영</span>
+              <span className="live-badge"><i /> {t.copy.live}</span>
             </div>
 
             <section className="config-section">
               <div className="section-title">
                 <span className="section-number">01</span>
-                <strong>내부 사이즈</strong>
+                <strong>{t.copy.internalSize}</strong>
                 <Ruler size={17} aria-hidden="true" />
               </div>
               <div className="dimension-inputs">
                 {[
-                  ["가로", width, setWidth],
-                  ["세로", depth, setDepth],
-                  ["높이", height, setHeight],
+                  [t.copy.width, width, setWidth],
+                  [t.copy.depth, depth, setDepth],
+                  [t.copy.height, height, setHeight],
                 ].map(([label, value, setter]) => (
                   <label key={label as string}>
                     <span>{label as string}</span>
@@ -498,7 +540,7 @@ export default function BoxStudio() {
             <section className="config-section">
               <div className="section-title">
                 <span className="section-number">02</span>
-                <strong>재질</strong>
+                <strong>{t.copy.material}</strong>
                 <ChevronDown size={17} aria-hidden="true" />
               </div>
               <div className="material-list">
@@ -506,6 +548,7 @@ export default function BoxStudio() {
                   <button
                     key={item.id}
                     className={`material-option ${paper === item.id ? "selected" : ""}`}
+                    aria-pressed={paper === item.id}
                     onClick={() => setPaper(item.id)}
                   >
                     <i style={{ background: item.swatch }} />
@@ -519,18 +562,19 @@ export default function BoxStudio() {
             <section className="config-section">
               <div className="section-title">
                 <span className="section-number">03</span>
-                <strong>인쇄 · 후가공</strong>
+                <strong>{t.copy.printFinish}</strong>
                 <ChevronDown size={17} aria-hidden="true" />
               </div>
               <div className="segmented-options">
                 {([
-                  ["none", "무지"],
-                  ["one", "1도 인쇄"],
-                  ["full", "4도 컬러"],
+                  ["none", t.printing.none],
+                  ["one", t.printing.one],
+                  ["full", t.printing.full],
                 ] as Array<[PrintType, string]>).map(([id, label]) => (
                   <button
                     key={id}
                     className={printType === id ? "selected" : ""}
+                    aria-pressed={printType === id}
                     onClick={() => setPrintType(id)}
                   >
                     {label}
@@ -544,39 +588,39 @@ export default function BoxStudio() {
                   onChange={(event) => setCoating(event.target.checked)}
                 />
                 <span className="custom-check">{coating ? <Check size={13} aria-hidden="true" /> : null}</span>
-                <span><strong>무광 코팅</strong><small>표면 보호와 차분한 질감을 더합니다.</small></span>
-                <b>+64원</b>
+                <span><strong>{t.copy.matte}</strong><small>{t.copy.matteNote}</small></span>
+                <b>+{money(64)}</b>
               </label>
             </section>
 
             <section className="config-section last">
               <div className="section-title">
                 <span className="section-number">04</span>
-                <strong>수량 · 납기</strong>
+                <strong>{t.copy.quantityLeadTime}</strong>
                 <ChevronDown size={17} aria-hidden="true" />
               </div>
               <div className="quantity-row">
                 <label>
-                  <span>제작 수량</span>
+                  <span>{t.copy.quantity}</span>
                   <select
                     value={quantity}
                     onChange={(event) => setQuantity(Number(event.target.value))}
                   >
-                    <option value="100">100개</option>
-                    <option value="300">300개</option>
-                    <option value="500">500개</option>
-                    <option value="1000">1,000개</option>
-                    <option value="2000">2,000개</option>
+                    <option value="100">{quantityLabel(100)}</option>
+                    <option value="300">{quantityLabel(300)}</option>
+                    <option value="500">{quantityLabel(500)}</option>
+                    <option value="1000">{quantityLabel(1000)}</option>
+                    <option value="2000">{quantityLabel(2000)}</option>
                   </select>
                 </label>
                 <label>
-                  <span>납기</span>
+                  <span>{t.copy.leadTime}</span>
                   <select
                     value={express ? "express" : "standard"}
                     onChange={(event) => setExpress(event.target.value === "express")}
                   >
-                    <option value="standard">일반 · 10일</option>
-                    <option value="express">빠른 · 6일</option>
+                    <option value="standard">{t.copy.standard}</option>
+                    <option value="express">{t.copy.express}</option>
                   </select>
                 </label>
               </div>
@@ -585,24 +629,24 @@ export default function BoxStudio() {
 
           <div className="quote-card">
             <div className="quote-label">
-              <span><Calculator size={18} aria-hidden="true" /> 예상 견적</span>
-              <small>VAT 포함</small>
+              <span><Calculator size={18} aria-hidden="true" /> {t.copy.estimate}</span>
+              <small>{t.copy.vatCurrency}</small>
             </div>
             <div className="unit-price">
-              <span>개당 <b>{numberFormatter.format(quote.unit)}원</b></span>
-              <small>{numberFormatter.format(quantity)}개 기준</small>
+              <span>{t.copy.unit} <b>{money(quote.unit)}</b></span>
+              <small>{formatQuantityBasis(quantity, locale)}</small>
             </div>
             <div className="quote-total">
               <strong>{numberFormatter.format(quote.total)}</strong>
-              <span>원</span>
+              <span>{t.copy.currencyUnit}</span>
             </div>
             <div className="quote-details">
-              <span>박스 제작비 <b>{numberFormatter.format(quote.production)}원</b></span>
-              <span>목형 · 인쇄판 <b>{numberFormatter.format(quote.die + quote.plate)}원</b></span>
+              <span>{t.copy.productionCost} <b>{money(quote.production)}</b></span>
+              <span>{t.copy.tooling} <b>{money(quote.die + quote.plate)}</b></span>
             </div>
             <button className="quote-button" onClick={() => setQuoteOpen(true)}>
               <CartCheck size={20} aria-hidden="true" />
-              이 사양으로 견적 받기
+              {t.copy.getQuote}
             </button>
           </div>
         </aside>
@@ -612,6 +656,7 @@ export default function BoxStudio() {
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setQuoteOpen(false)}>
           <section
             className="quote-modal"
+            ref={modalRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="quote-modal-title"
@@ -620,27 +665,28 @@ export default function BoxStudio() {
             <button
               className="modal-close"
               onClick={() => setQuoteOpen(false)}
-              aria-label="견적서 닫기"
+              aria-label={t.copy.closeQuote}
             >
               <CloseCircle size={24} aria-hidden="true" />
             </button>
-            <span className="modal-kicker"><Check size={14} aria-hidden="true" /> 견적 계산 완료</span>
-            <h2 id="quote-modal-title">제작 가능한 사양이에요.</h2>
-            <p>선택한 옵션을 기준으로 예상 견적서를 만들었습니다.</p>
+            <span className="modal-kicker"><Check size={14} aria-hidden="true" /> {t.copy.quoteReady}</span>
+            <h2 id="quote-modal-title">{t.copy.quoteTitle}</h2>
+            <p>{t.copy.quoteDescription}</p>
             <div className="modal-summary">
-              <div><span>박스</span><strong>{boxTypes.find((item) => item.id === boxType)?.name}</strong></div>
-              <div><span>규격</span><strong>{width} × {depth} × {height} mm</strong></div>
-              <div><span>수량</span><strong>{numberFormatter.format(quantity)}개</strong></div>
-              <div><span>예상 총액</span><strong>{numberFormatter.format(quote.total)}원</strong></div>
+              <div><span>{t.copy.box}</span><strong>{boxTypes.find((item) => item.id === boxType)?.name}</strong></div>
+              <div><span>{t.copy.dimensions}</span><strong>{width} × {depth} × {height} mm</strong></div>
+              <div><span>{t.copy.quantity}</span><strong>{quantityLabel(quantity)}</strong></div>
+              <div><span>{t.copy.total}</span><strong>{money(quote.total)}</strong></div>
             </div>
             <button className="modal-primary" onClick={downloadQuote}>
               <Document size={19} aria-hidden="true" />
-              견적서 저장
+              {t.copy.saveQuote}
             </button>
-            <small className="modal-note">실제 제작 가능 여부와 최종 금액은 도면 검토 후 확정됩니다.</small>
+            <small className="modal-note">{t.copy.quoteNote}</small>
           </section>
         </div>
       ) : null}
     </main>
+    </LocaleContext.Provider>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { previewLabel, type Locale } from "./i18n";
 import {
   createFlatLayout,
   edgeFrame,
@@ -27,6 +28,7 @@ export type FoldMode = "closed" | "open" | "dieline" | "folding";
 
 type BoxPreviewProps = {
   boxType: BoxType;
+  locale?: Locale;
   width: number;
   depth: number;
   height: number;
@@ -450,6 +452,7 @@ function initialProgress(mode: FoldMode, foldProgress?: number) {
 
 export default function BoxPreview({
   boxType,
+  locale = "ko",
   width,
   depth,
   height,
@@ -852,21 +855,7 @@ export default function BoxPreview({
       data-box-type={boxType}
       data-fold-mode={mode}
       role="img"
-      aria-label={`${width} × ${depth} × ${height} 밀리미터 ${
-        boxType === "mailer"
-          ? "G형 롤엔드 택배박스"
-          : boxType === "shipping"
-            ? "A형 골판지박스"
-            : "서랍형 패키지"
-      }의 ${
-        mode === "dieline"
-          ? "전개"
-          : mode === "open"
-            ? "열림"
-            : mode === "folding"
-              ? `${Math.round((foldProgress ?? 0) * 100)}퍼센트 접힘`
-              : "완성"
-      } 상태`}
+      aria-label={previewLabel(locale, boxType, [width, depth, height], mode, foldProgress ?? 0)}
     />
   );
 }

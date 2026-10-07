@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { dictionaries } from "./i18n";
+import { getRequestLocale } from "./locale-server";
 import "./globals.css";
 
-const defaultTitle = "FORMBOX — 3D 박스 실시간 견적";
-const description =
-  "AI·PDF 도면을 관리하고 박스 완성·열림 모션과 실시간 제작 견적을 확인하는 패키지 제작 워크스페이스.";
-
 export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getRequestLocale();
+  const t = dictionaries[locale];
+  const defaultTitle = t.meta.title;
+  const description = t.meta.description;
   const requestHeaders = await headers();
   const forwardedHost = requestHeaders.get("x-forwarded-host")?.split(",")[0];
   const host =
@@ -43,7 +45,8 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     openGraph: {
       type: "website",
-      locale: "ko_KR",
+      locale: locale === "en" ? "en_US" : "ko_KR",
+      alternateLocale: locale === "en" ? "ko_KR" : "en_US",
       title: defaultTitle,
       description,
       images: [
@@ -51,7 +54,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: "/og.png",
           width: 1728,
           height: 909,
-          alt: "FORMBOX 3D 박스 실시간 견적",
+          alt: t.meta.imageAlt,
         },
       ],
     },
@@ -64,13 +67,14 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getRequestLocale();
   return (
-    <html lang="ko">
+    <html lang={locale}>
       <body>{children}</body>
     </html>
   );
